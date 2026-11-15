@@ -1,9 +1,32 @@
-# Full stack on one machine:
-#   docker compose up -d --build
-# Then open http://localhost:3000. Put the model checkpoints in backend/model first.
+# Lumber Spine AI - full stack with Docker Compose
 #
-# Services: redis (broker + results), api (FastAPI, no torch), worker (Celery + PyTorch),
-# web (Next.js). Scale inference with: docker compose up -d --scale worker=2
+#   Windows: double-click docker-start.bat     (stop: docker-stop.bat)
+#   Any OS:  docker compose up -d --build      then open http://localhost:3000
+#
+# Before the first start:
+#   1. Put the model checkpoints in backend/model   (see backend/model/README.md)
+#   2. Copy backend/.env.example to backend/.env and add your API keys
+#
+# Services
+#   redis   job broker and result store
+#   api     FastAPI on http://localhost:8000 (no PyTorch; only queues work)
+#   worker  Celery worker with PyTorch; loads the models once and runs every analysis
+#   web     Next.js on http://localhost:3000
+#
+# Useful commands
+#   docker compose ps                      status and health
+#   docker compose logs -f worker          follow analysis logs
+#   docker compose up -d --scale worker=2  more analysis capacity (needs more RAM)
+#   docker compose down                    stop (saved cases and chats are kept)
+#   docker compose down -v                 stop and delete saved cases and chats
+
+name: lumber-spine-ai
+
+x-backend-env: &backend-env
+  REDIS_URL: redis://redis:6379/0
+  DATA_DIR: /app/data
+  MODEL_DIR: /app/model
+  RUNNING_IN_DOCKER: "1" # localhost in OLLAMA_BASE_URL then means this computer
 
 services:
   redis:
@@ -23,15 +46,14 @@ services:
       - path: ./backend/.env
         required: false
     environment:
-      REDIS_URL: redis://redis:6379/0
+      <<: *backend-env
       JOB_BACKEND: celery
-      DATA_DIR: /app/data
-      MODEL_DIR: /app/model
       FRONTEND_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
     ports: ["8000:8000"]
     volumes:
       - app-data:/app/data
       - ./backend/model:/app/model:ro
+    extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on:
       redis: { condition: service_healthy }
     restart: unless-stopped
@@ -43,12 +65,12 @@ services:
       - path: ./backend/.env
         required: false
     environment:
-      REDIS_URL: redis://redis:6379/0
-      DATA_DIR: /app/data
-      MODEL_DIR: /app/model
+      <<: *backend-env
+      WORKER_PRELOAD_MODELS: "1"
     volumes:
       - app-data:/app/data # shared with the API: uploads are handed over here
       - ./backend/model:/app/model:ro
+    extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on:
       redis: { condition: service_healthy }
     restart: unless-stopped
@@ -57,11 +79,13 @@ services:
     build:
       context: ./frontend
       args:
+        # The browser calls the API directly, so this is the address as seen from your browser.
         NEXT_PUBLIC_API_ORIGIN: http://localhost:8000
     image: lumber-spine-ai/web:local
     ports: ["3000:3000"]
-    depends_on: [api]
+    depends_on:
+      api: { condition: service_healthy }
     restart: unless-stopped
 
 volumes:
-  app-data:
+  app-data: # saved cases, conversations and in-flight uploads

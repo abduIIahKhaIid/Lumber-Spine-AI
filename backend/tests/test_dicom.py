@@ -75,3 +75,15 @@ def test_slice_bounds_never_wrap():
 def test_severity_crop_is_rgb_and_handles_edges():
     crop = severity_crop(np.zeros((64, 64), dtype=np.uint8), 2, 2)
     assert crop.mode == "RGB" and crop.size[0] > 0
+
+
+def test_ollama_localhost_points_to_the_host_inside_docker(monkeypatch):
+    from app.core import config
+
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/")
+    monkeypatch.setenv("RUNNING_IN_DOCKER", "1")
+    config.get_settings.cache_clear()
+    assert config.get_settings().ollama_base_url == "http://host.docker.internal:11434"
+    monkeypatch.setenv("RUNNING_IN_DOCKER", "0")
+    config.get_settings.cache_clear()
+    assert config.get_settings().ollama_base_url == "http://localhost:11434"

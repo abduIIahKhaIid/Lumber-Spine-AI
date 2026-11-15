@@ -34,6 +34,15 @@ def _path(name: str, default: Path) -> Path:
     return path if path.is_absolute() else (BACKEND_DIR / path).resolve()
 
 
+def _host_url(value: str) -> str:
+    """Inside Docker, "localhost" is the container itself; point it at the host machine."""
+    value = value.strip().rstrip("/")
+    if os.getenv("RUNNING_IN_DOCKER") == "1":
+        for local in ("://localhost", "://127.0.0.1"):
+            value = value.replace(local, "://host.docker.internal")
+    return value
+
+
 def _models(provider: str, fallback: str) -> list[str]:
     """`GROQ_MODELS=a,b` wins; the older single `GROQ_MODEL` setting stays supported."""
     models = _list(f"{provider}_MODELS")
@@ -71,7 +80,7 @@ class Settings:
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", "").strip())
     groq_api_key: str = field(default_factory=lambda: os.getenv("GROQ_API_KEY", "").strip())
     ollama_base_url: str = field(
-        default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/")
+        default_factory=lambda: _host_url(os.getenv("OLLAMA_BASE_URL", ""))
     )
     ollama_api_key: str = field(default_factory=lambda: os.getenv("OLLAMA_API_KEY", "").strip())
     gemini_models: list[str] = field(default_factory=lambda: _models("GEMINI", "gemini-2.5-flash"))

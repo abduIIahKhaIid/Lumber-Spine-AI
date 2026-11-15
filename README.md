@@ -69,12 +69,35 @@ docker-compose.yml      redis + api + worker + web
 5. Optional: start Redis (`docker run -d -p 6379:6379 redis:7-alpine`) to use the Celery worker.
 6. Double-click `run-project.bat` and open http://localhost:3000.
 
-### Docker
+### Docker Compose (recommended)
 
-```bash
-cp backend/.env.example backend/.env   # add API keys
-docker compose up -d --build           # http://localhost:3000, API on :8000
-```
+Needs only Docker Desktop (Windows/macOS) or Docker Engine with Compose v2 (Linux).
+
+1. Copy the checkpoints into `backend/model`.
+2. Copy `backend/.env.example` to `backend/.env` and add your API keys (optional, for the assistant).
+3. Start the stack:
+   - Windows: double-click `docker-start.bat` (stop with `docker-stop.bat`)
+   - Any OS: `docker compose up -d --build`
+4. Open http://localhost:3000. The API is on http://localhost:8000 (`/api/docs`, `/ready`).
+
+| Service | Role |
+| --- | --- |
+| `redis` | Job broker and result store |
+| `api` | FastAPI, queues uploads (no PyTorch) |
+| `worker` | Celery + PyTorch, loads the models once and runs analyses |
+| `web` | Next.js frontend |
+
+Notes:
+
+- The first build downloads CPU PyTorch and takes 10–20 minutes; later starts take seconds.
+- The worker keeps all checkpoints in memory (about 3 GB). On Windows, give Docker Desktop at
+  least 6 GB of memory (Settings → Resources, or `.wslconfig` for WSL 2).
+- Stop `run-project.bat` windows first; both use ports 3000 and 8000.
+- `OLLAMA_BASE_URL=http://localhost:11434` in `backend/.env` is translated to
+  `host.docker.internal` inside the containers, so a local Ollama keeps working.
+- Saved cases and conversations live in the `app-data` volume and survive restarts.
+  `docker compose down -v` deletes them.
+- Logs: `docker compose logs -f worker` (analyses) or `docker compose logs -f api`.
 
 ### Manual
 

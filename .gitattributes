@@ -1,3 +1,4 @@
 run-project.bat text eol=crlf
 scripts/*.bat text eol=crlf
 *.sh text eol=lf
+*.bat text eol=crlf
