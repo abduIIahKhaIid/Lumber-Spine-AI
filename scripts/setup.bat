@@ -1,6 +1,8 @@
 @echo off
 setlocal
-rem One-time setup on Windows: Python 3.12 virtual environment + Node packages.
+rem Setup on Windows: Python 3.12 virtual environment + Node packages.
+rem Run it once, and again after pulling a version with new packages.
+rem Close running project windows first: Windows locks files that are in use.
 set "ROOT=%~dp0.."
 set "BACKEND=%ROOT%\backend"
 set "FRONTEND=%ROOT%\frontend"
@@ -17,6 +19,8 @@ popd
 if not exist "%BACKEND%\.env" copy "%BACKEND%\.env.example" "%BACKEND%\.env" >nul
 
 pushd "%FRONTEND%"
+rem Remove the old build cache so styles are rebuilt with the new packages.
+if exist ".next" rmdir /s /q ".next"
 call npm.cmd ci --no-audit --no-fund || (popd & goto :fail)
 popd
 echo.

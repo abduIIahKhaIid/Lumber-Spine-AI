@@ -13,10 +13,15 @@ if not exist "%PY%" (
   echo Backend environment not found. Run scripts\setup.bat first.
   pause & exit /b 1
 )
-if not exist "%FRONTEND%\node_modules\.bin\next.cmd" (
-  echo Frontend packages not found. Run scripts\setup.bat first.
+rem Packages change between versions: stop early instead of starting a broken app.
+"%PY%" -c "import celery, redis, fastapi, torch, timm, ultralytics, pydicom" >nul 2>&1
+if errorlevel 1 (
+  echo Backend packages are missing or out of date.
+  echo Close any running project windows, then run scripts\setup.bat.
   pause & exit /b 1
 )
+if not exist "%FRONTEND%\node_modules\recharts\package.json" goto :frontend_outdated
+if not exist "%FRONTEND%\node_modules\@fontsource-variable\atkinson-hyperlegible-next\package.json" goto :frontend_outdated
 
 rem Redis is optional: without it the API runs analyses in-process.
 "%PY%" -c "import redis,sys; sys.exit(0 if redis.Redis(socket_connect_timeout=1).ping() else 1)" >nul 2>&1
@@ -35,3 +40,10 @@ echo.
 echo Open http://localhost:3000 once the windows report they are ready.
 echo Close the windows to stop the project.
 pause
+exit /b 0
+
+:frontend_outdated
+echo Frontend packages are missing or out of date.
+echo Close any running project windows, then run scripts\setup.bat.
+pause
+exit /b 1
