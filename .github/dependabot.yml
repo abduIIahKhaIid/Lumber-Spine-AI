@@ -1,22 +1,21 @@
+# Version-update pull requests are switched off (open-pull-requests-limit: 0).
+# Dependabot then only opens pull requests that fix known security vulnerabilities,
+# which needs "Dependabot security updates" turned on under Settings > Code security.
 version: 2
 updates:
   - package-ecosystem: pip
     directory: /backend
-    schedule: { interval: weekly }
-    open-pull-requests-limit: 5
-    groups:
-      python-minor:
-        update-types: [minor, patch]
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 0
   - package-ecosystem: npm
     directory: /frontend
-    schedule: { interval: weekly }
-    open-pull-requests-limit: 5
-    groups:
-      npm-minor:
-        update-types: [minor, patch]
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 0
   - package-ecosystem: docker
     directories: [/backend, /frontend]
     schedule: { interval: monthly }
+    open-pull-requests-limit: 0
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: monthly }
+    open-pull-requests-limit: 0

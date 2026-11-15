@@ -1,7 +1,6 @@
 # Lumber Spine AI (SpineScope)
 
 [![CI](https://github.com/abduIIahKhaIid/Lumber-Spine-AI/actions/workflows/ci.yml/badge.svg)](https://github.com/abduIIahKhaIid/Lumber-Spine-AI/actions/workflows/ci.yml)
-[![Security](https://github.com/abduIIahKhaIid/Lumber-Spine-AI/actions/workflows/security.yml/badge.svg)](https://github.com/abduIIahKhaIid/Lumber-Spine-AI/actions/workflows/security.yml)
 
 Web application that grades lumbar spine degeneration on MRI, built on models trained for the
 RSNA 2024 Lumbar Spine Degenerative Classification task. It grades three conditions at the five
@@ -54,7 +53,7 @@ frontend/               Next.js 15 + React 19 + Tailwind CSS 4
   features/scans|chat|cases|home   feature modules
   components/ lib/      shared shell and utilities
 docs/                   architecture and operations notes
-.github/workflows/      CI (lint, tests, build, Docker smoke test, GHCR publish) and security
+.github/workflows/ci.yml  one pipeline: lint, tests, build, Docker smoke test, security, GHCR publish
 docker-compose.yml      redis + api + worker + web
 ```
 
@@ -119,9 +118,11 @@ cd backend && ruff check . && ruff format --check . && pytest
 cd frontend && npm run check      # prettier, TypeScript, unit tests, production build
 ```
 
-CI runs these plus a Docker build and smoke test of the whole stack. The security workflow runs
-CodeQL, gitleaks, Bandit, pip-audit, npm audit, Trivy and dependency review. On `main`, images are
-published to GitHub Container Registry for a future AWS or Render deployment.
+A single GitHub Actions workflow (`.github/workflows/ci.yml`) runs these, a Docker build and
+smoke test of the whole stack, and the security scans: CodeQL, gitleaks, Bandit, pip-audit,
+npm audit, Trivy and dependency review. On `main`, images are published to GitHub Container
+Registry only when everything passed. Security scans also re-run weekly. Dependabot opens pull
+requests only for security fixes.
 
 ## Validation status
 
