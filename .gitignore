@@ -1,0 +1,38 @@
+# Python
+**/.venv/
+**/__pycache__/
+**/*.pyc
+**/.ruff_cache/
+**/.pytest_cache/
+*.egg-info/
+build/
+
+# Node / Next.js
+**/node_modules/
+**/.next*/
+**/*.tsbuildinfo
+
+# Secrets and local configuration
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Patient data, model weights and runtime state never go to Git
+backend/data/
+backend/model/*
+!backend/model/README.md
+backend/uploads/
+**/*.dcm
+**/*.zip
+**/*.pt
+**/*.pth
+**/*.onnx
+**/*.sqlite3
+
+# Logs and OS files
+*.log
+.DS_Store
+Thumbs.db
+
+# Redis snapshots
+*.rdb

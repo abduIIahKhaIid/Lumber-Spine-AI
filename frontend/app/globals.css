@@ -1,0 +1,192 @@
+@import "tailwindcss";
+@import "@fontsource-variable/atkinson-hyperlegible-next";
+
+/*
+  Lightbox palette: a cool, pale reading surface for text and controls, and dark
+  "film" panels wherever MRI pixels are shown. Severity colors are semantic only.
+*/
+@theme {
+  --font-sans: "Atkinson Hyperlegible Next Variable", ui-sans-serif, system-ui, sans-serif;
+
+  --color-bone: #eef1f4;
+  --color-paper: #ffffff;
+  --color-ink: #14212e;
+  --color-graphite: #5b6b7b;
+  --color-rule: #d5dce3;
+  --color-film: #0e1620;
+  --color-film-2: #18232f;
+  --color-cobalt: #2b59c3;
+  --color-cobalt-deep: #1f4396;
+  --color-cobalt-wash: #e4ebf9;
+
+  --color-sev-normal: #22c55e;
+  --color-sev-normal-ink: #15803d;
+  --color-sev-moderate: #eab308;
+  --color-sev-moderate-ink: #a16207;
+  --color-sev-severe: #ef4444;
+  --color-sev-severe-ink: #b91c1c;
+
+  --radius-panel: 14px;
+  --radius-control: 10px;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html {
+  background: var(--color-bone);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-feature-settings: "tnum" 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  min-height: 100dvh;
+}
+
+::selection {
+  background: #c9d7f5;
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-cobalt);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+button:not(:disabled),
+[role="button"] {
+  cursor: pointer;
+}
+
+/* Shared building blocks kept deliberately few; layout lives in components. */
+@layer components {
+  .panel {
+    background: var(--color-paper);
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-panel);
+  }
+  .film {
+    background: var(--color-film);
+    color: #dbe4ee;
+    border-radius: var(--radius-panel);
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: var(--radius-control);
+    padding: 0.6rem 1rem;
+    font-weight: 650;
+    font-size: 0.925rem;
+    line-height: 1.2;
+    transition:
+      background-color 0.15s,
+      border-color 0.15s,
+      color 0.15s;
+  }
+  .btn:disabled {
+    opacity: 0.5;
+  }
+  .btn-primary {
+    background: var(--color-cobalt);
+    color: white;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: var(--color-cobalt-deep);
+  }
+  .btn-quiet {
+    border: 1px solid var(--color-rule);
+    background: var(--color-paper);
+    color: var(--color-ink);
+  }
+  .btn-quiet:hover:not(:disabled) {
+    border-color: var(--color-cobalt);
+    color: var(--color-cobalt-deep);
+  }
+  .field {
+    width: 100%;
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-control);
+    background: var(--color-paper);
+    padding: 0.6rem 0.75rem;
+    font-size: 0.925rem;
+  }
+  .field:focus {
+    outline: 2px solid var(--color-cobalt);
+    outline-offset: 0;
+    border-color: transparent;
+  }
+  .prose-chat {
+    line-height: 1.65;
+    overflow-wrap: anywhere;
+  }
+  .prose-chat p + p,
+  .prose-chat p + ul,
+  .prose-chat ul + p,
+  .prose-chat p + ol {
+    margin-top: 0.7em;
+  }
+  .prose-chat ul {
+    list-style: disc;
+    padding-left: 1.3em;
+  }
+  .prose-chat ol {
+    list-style: decimal;
+    padding-left: 1.3em;
+  }
+  .prose-chat li + li {
+    margin-top: 0.25em;
+  }
+  .prose-chat h1,
+  .prose-chat h2,
+  .prose-chat h3 {
+    font-weight: 700;
+    margin: 0.9em 0 0.35em;
+  }
+  .prose-chat code {
+    background: #e8edf2;
+    border-radius: 5px;
+    padding: 0.1em 0.35em;
+    font-size: 0.9em;
+  }
+  .prose-chat pre {
+    background: var(--color-film);
+    color: #e2e8f0;
+    border-radius: 10px;
+    padding: 0.8em 1em;
+    overflow-x: auto;
+    margin: 0.7em 0;
+  }
+  .prose-chat pre code {
+    background: none;
+    padding: 0;
+  }
+  .prose-chat table {
+    border-collapse: collapse;
+    margin: 0.7em 0;
+    font-size: 0.92em;
+  }
+  .prose-chat th,
+  .prose-chat td {
+    border: 1px solid var(--color-rule);
+    padding: 0.35em 0.6em;
+  }
+  .prose-chat a {
+    color: var(--color-cobalt-deep);
+    text-decoration: underline;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

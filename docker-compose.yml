@@ -1,0 +1,67 @@
+# Full stack on one machine:
+#   docker compose up -d --build
+# Then open http://localhost:3000. Put the model checkpoints in backend/model first.
+#
+# Services: redis (broker + results), api (FastAPI, no torch), worker (Celery + PyTorch),
+# web (Next.js). Scale inference with: docker compose up -d --scale worker=2
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build: { context: ./backend, target: api }
+    image: lumber-spine-ai/api:local
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      JOB_BACKEND: celery
+      DATA_DIR: /app/data
+      MODEL_DIR: /app/model
+      FRONTEND_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+    ports: ["8000:8000"]
+    volumes:
+      - app-data:/app/data
+      - ./backend/model:/app/model:ro
+    depends_on:
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  worker:
+    build: { context: ./backend, target: worker }
+    image: lumber-spine-ai/worker:local
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DATA_DIR: /app/data
+      MODEL_DIR: /app/model
+    volumes:
+      - app-data:/app/data # shared with the API: uploads are handed over here
+      - ./backend/model:/app/model:ro
+    depends_on:
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_ORIGIN: http://localhost:8000
+    image: lumber-spine-ai/web:local
+    ports: ["3000:3000"]
+    depends_on: [api]
+    restart: unless-stopped
+
+volumes:
+  app-data:
