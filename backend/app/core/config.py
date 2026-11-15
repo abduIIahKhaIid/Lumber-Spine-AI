@@ -83,10 +83,8 @@ class Settings:
         default_factory=lambda: _host_url(os.getenv("OLLAMA_BASE_URL", ""))
     )
     ollama_api_key: str = field(default_factory=lambda: os.getenv("OLLAMA_API_KEY", "").strip())
-    gemini_models: list[str] = field(default_factory=lambda: _models("GEMINI", "gemini-2.5-flash"))
-    groq_models: list[str] = field(
-        default_factory=lambda: _models("GROQ", "llama-3.3-70b-versatile")
-    )
+    gemini_models: list[str] = field(default_factory=lambda: _models("GEMINI", "gemini-3.8-flash"))
+    groq_models: list[str] = field(default_factory=lambda: _models("GROQ", "qwen/qwen3.8-27b"))
     ollama_models: list[str] = field(default_factory=lambda: _models("OLLAMA", "gemma3:4b"))
     llm_fallback_order: list[str] = field(
         default_factory=lambda: _list("LLM_FALLBACK_ORDER", "groq,gemini,ollama")
@@ -95,10 +93,9 @@ class Settings:
     llm_vision_order: list[str] = field(
         default_factory=lambda: _list("LLM_VISION_ORDER", "gemini,groq,ollama")
     )
+    # Empty means: use GROQ_MODELS for images too (e.g. qwen/qwen3.8-27b reads images).
     groq_vision_models: list[str] = field(
-        default_factory=lambda: _list(
-            "GROQ_VISION_MODELS", "meta-llama/llama-4-scout-17b-16e-instruct"
-        )
+        default_factory=lambda: _list("GROQ_VISION_MODELS") or _models("GROQ", "qwen/qwen3.8-27b")
     )
     llm_timeout_seconds: int = field(default_factory=lambda: _int("LLM_TIMEOUT_SECONDS", 90))
 

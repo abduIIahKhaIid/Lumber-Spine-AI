@@ -153,13 +153,19 @@ def test_image_messages_use_the_vision_chain(monkeypatch):
 
     monkeypatch.setenv("GROQ_API_KEY", "k")
     monkeypatch.setenv("GEMINI_API_KEY", "k")
-    monkeypatch.setenv("GROQ_MODEL", "text-only-model")
+    monkeypatch.setenv("GROQ_MODEL", "qwen/qwen3.8-27b")
+    monkeypatch.setenv("GROQ_VISION_MODELS", "")
     config.get_settings.cache_clear()
     text_chain = [(c.provider, c.model) for c in providers.candidates()]
     vision_chain = [(c.provider, c.model) for c in providers.candidates(vision=True)]
-    assert text_chain[0] == ("groq", "text-only-model")
+    assert text_chain[0] == ("groq", "qwen/qwen3.8-27b")
     assert vision_chain[0][0] == "gemini"
-    assert ("groq", "text-only-model") not in vision_chain
+    assert ("groq", "qwen/qwen3.8-27b") in vision_chain  # same model reads images
+    monkeypatch.setenv("GROQ_VISION_MODELS", "vision-only")
+    config.get_settings.cache_clear()
+    vision_chain = [(c.provider, c.model) for c in providers.candidates(vision=True)]
+    assert ("groq", "vision-only") in vision_chain
+    assert ("groq", "qwen/qwen3.8-27b") not in vision_chain
 
 
 def test_result_preview_is_stored_but_never_sent_to_the_model(chain, sample_result):
