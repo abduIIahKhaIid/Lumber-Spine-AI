@@ -3,7 +3,7 @@
 #   worker - Celery consumer with CPU PyTorch and the model code
 # Model weights are mounted at runtime (/app/model); they are never baked into an image.
 
-FROM python:3.12-slim AS base
+FROM python:3.15-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
