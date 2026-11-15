@@ -3,14 +3,31 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import clsx from "clsx";
-import { FileHeart, Languages, PanelLeft, X } from "lucide-react";
+import { Languages, PanelLeft, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { SpineMark } from "@/components/app-shell";
+import CaseAttachment from "./case-attachment";
 import Composer from "./composer";
 import MessageList from "./messages";
 import ThreadSidebar from "./thread-sidebar";
 import type { ProviderStatus } from "./types";
 import { useChat } from "./use-chat";
+
+const CASE_STARTERS = [
+  { title: "Explain this result", prompt: "Explain this scan result in simple words." },
+  {
+    title: "What matters most",
+    prompt: "Which level in this result should my doctor look at first, and why?",
+  },
+  {
+    title: "Colors and scores",
+    prompt: "What do the colors and the percentage scores in this result mean?",
+  },
+  {
+    title: "Urdu mein samjhao",
+    prompt: "Is result ko aasaan Urdu mein samjhao.",
+  },
+];
 
 const STARTERS = [
   {
@@ -100,11 +117,6 @@ export default function AssistantApp() {
             {sidebar ? <X size={18} /> : <PanelLeft size={18} />}
           </button>
           <h1 className="min-w-0 truncate font-semibold">{chat.thread?.title ?? "New chat"}</h1>
-          {chat.thread?.has_case && (
-            <span className="hidden items-center gap-1 rounded-full bg-cobalt-wash px-2.5 py-0.5 text-xs font-semibold text-cobalt-deep sm:inline-flex">
-              <FileHeart size={13} /> Scan result attached
-            </span>
-          )}
           <div className="ml-auto flex items-center gap-2">
             <span className="hidden text-xs text-graphite md:inline" title="Fallback order">
               {chat.streaming && chat.providerLabel
@@ -130,7 +142,29 @@ export default function AssistantApp() {
           </div>
         </header>
         <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
-          {empty ? (
+          {empty && chat.thread?.case_context ? (
+            <div className="mx-auto w-full max-w-3xl px-4 py-6">
+              <CaseAttachment context={chat.thread.case_context} />
+              <p className="mt-8 text-center text-graphite">
+                The result is attached. Ask anything about it, or start with one of these.
+              </p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                {CASE_STARTERS.map((starter) => (
+                  <button
+                    key={starter.title}
+                    type="button"
+                    onClick={() => chat.send(starter.prompt, null, language)}
+                    className="rounded-xl border border-rule bg-paper p-4 text-left hover:border-cobalt"
+                  >
+                    <span className="font-semibold">{starter.title}</span>
+                    <span className="mt-1 block text-sm text-graphite" dir="auto">
+                      {starter.prompt}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : empty ? (
             <div className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center px-4 py-10 text-center">
               <SpineMark className="h-12 w-10 text-ink" />
               <h2 className="mt-4 text-2xl font-bold tracking-tight">
@@ -166,6 +200,7 @@ export default function AssistantApp() {
             <MessageList
               messages={chat.messages}
               streaming={chat.streaming}
+              attachment={chat.thread?.case_context}
               onEdit={chat.edit}
               onRegenerate={chat.regenerate}
             />

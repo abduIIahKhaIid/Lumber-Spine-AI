@@ -11,7 +11,7 @@ FastAPI API plus Celery workers for lumbar MRI grading. See the repository READM
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/api/scans/{single\|multi}` | Upload a DICOM or series ZIP, returns `job_id` (202) |
+| POST | `/api/scans/{single\|multi}` | Upload a DICOM, a series ZIP or several `.dcm` slices (`files`), returns `job_id` (202) |
 | GET | `/api/jobs/{id}` | Job state, progress, result |
 | GET | `/api/jobs/{id}/report.pdf` | PDF report of a finished analysis |
 | POST | `/api/convert-dicom` | DICOM to JPEG preview (assistant attachments) |
@@ -24,4 +24,4 @@ FastAPI API plus Celery workers for lumbar MRI grading. See the repository READM
 | * | `/api/cases/...` | Case library (requires `X-Review-Key`) |
 | GET | `/health`, `/ready` | Liveness and readiness (queue, worker, models) |
 
-Interactive documentation: http://localhost:8000/api/docs
+Interactive documentation: http://localhost:8000/docs (Swagger UI) and http://localhost:8000/redoc

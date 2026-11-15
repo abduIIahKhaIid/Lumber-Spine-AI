@@ -16,6 +16,7 @@ import {
   SkipForward,
 } from "lucide-react";
 import { SpineMark } from "@/components/app-shell";
+import CaseAttachment, { type CaseContext } from "./case-attachment";
 import type { ChatMessage, Step } from "./types";
 
 const PROVIDER = { groq: "Groq", gemini: "Gemini", ollama: "Ollama" } as Record<string, string>;
@@ -109,7 +110,7 @@ function UserMessage({
   if (editing) {
     return (
       <form
-        className="ml-auto w-full max-w-[85%] rounded-2xl border border-cobalt bg-paper p-3"
+        className="ml-auto w-full max-w-[85%] rounded-2xl border border-[#9aa8b6] bg-paper p-3"
         onSubmit={(e) => {
           e.preventDefault();
           if (!draft.trim()) return;
@@ -124,7 +125,7 @@ function UserMessage({
           id={`edit-${message.id}`}
           autoFocus
           rows={Math.min(8, Math.max(2, draft.split("\n").length))}
-          className="w-full resize-none bg-transparent outline-none"
+          className="w-full resize-none bg-transparent outline-none focus-visible:outline-none"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
@@ -241,17 +242,20 @@ function AssistantMessage({
 export default function MessageList({
   messages,
   streaming,
+  attachment,
   onEdit,
   onRegenerate,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
+  attachment?: CaseContext | null;
   onEdit: (id: string, content: string) => void;
   onRegenerate: () => void;
 }) {
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant")?.id;
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6">
+      {attachment && <CaseAttachment context={attachment} />}
       {messages.map((message) =>
         message.role === "user" ? (
           <UserMessage

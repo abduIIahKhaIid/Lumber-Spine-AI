@@ -53,11 +53,32 @@ def test_local_queue_success_failure_and_cleanup(monkeypatch, tmp_path):
 
 def test_upload_validation():
     with TestClient(create_app()) as client:
-        assert client.post("/api/scans/single", files={"file": ("a.png", b"x")}).status_code == 415
+        png = client.post("/api/scans/single", files={"file": ("a.png", b"x")})
+        assert png.status_code == 415 and "DICOM" in png.json()["detail"]
         assert client.post("/api/scans/multi", files={"file": ("a.zip", b"")}).status_code == 400
         assert client.post("/api/scans/other", files={"file": ("a.zip", b"x")}).status_code == 404
         assert client.get("/api/jobs/missing").status_code == 404
         assert client.get("/health").json()["status"] == "ok"
+
+
+def test_multi_accepts_loose_dicom_slices(monkeypatch):
+    import zipfile as zf
+
+    seen = {}
+
+    def capture(kind, upload_path, progress):
+        with zf.ZipFile(upload_path) as archive:
+            seen["names"] = archive.namelist()
+        return fake_analysis(kind, upload_path, lambda *_: None) if kind == "single" else {}
+
+    monkeypatch.setattr(runner, "analyze_upload", capture)
+    with TestClient(create_app()) as client:
+        files = [("files", (f"IM{i}.dcm", b"DICM" + bytes([i]))) for i in range(4)]
+        job = client.post("/api/scans/multi", files=files).json()["job_id"]
+        assert poll(client, job)["state"] == "succeeded"
+        too_few = client.post("/api/scans/multi", files=files[:2])
+        assert too_few.status_code == 400
+    assert seen["names"] == [f"slice-{i:04d}.dcm" for i in range(4)]
 
 
 def test_report_pdf_for_finished_job(monkeypatch, sample_result):

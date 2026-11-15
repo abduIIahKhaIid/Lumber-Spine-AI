@@ -4,6 +4,7 @@ import { useState } from "react";
 import clsx from "clsx";
 import { Eye, EyeOff, Maximize2, Minimize2, Tag } from "lucide-react";
 import { styleFor } from "@/lib/severity";
+import { nearestOnRect, placeLabels } from "./labels";
 import type { Finding, ScanImage } from "./types";
 
 /** Dark viewing panel: MRI slice with severity-colored level boxes drawn as an SVG overlay. */
@@ -30,6 +31,18 @@ export default function FilmViewer({
   const onImage = findings.filter((f) => f.image_index === image.index);
   const stroke = Math.max(2.5, image.width / 180);
   const font = Math.max(12, image.width / 34);
+  const pad = font * 0.4;
+  const labels = placeLabels(
+    onImage.map((f) => ({
+      box: f.box,
+      side: f.side,
+      width: f.level_label.length * font * 0.62 + pad * 2,
+      height: font * 1.45,
+    })),
+    image.width,
+    image.height,
+    pad,
+  );
 
   return (
     <section className="film flex flex-col overflow-hidden" aria-label="Image viewer">
@@ -91,14 +104,8 @@ export default function FilmViewer({
                 const [x0, y0, x1, y1] = f.box;
                 const style = styleFor(f.severity);
                 const selected = f.id === selectedId;
-                const dim = selectedId && !selected;
                 return (
-                  <g
-                    key={f.id}
-                    opacity={dim ? 0.55 : 1}
-                    className="cursor-pointer"
-                    onClick={() => onSelect(f)}
-                  >
+                  <g key={f.id} opacity={selectedId && !selected ? 0.55 : 1}>
                     <rect
                       x={x0}
                       y={y0}
@@ -109,32 +116,65 @@ export default function FilmViewer({
                       fillOpacity={selected ? 0.22 : 0.12}
                       stroke={style.fill}
                       strokeWidth={selected ? stroke * 1.7 : stroke}
-                    />
-                    {showLabels && (
-                      <g
-                        transform={`translate(${Math.min(x1 + stroke * 2, image.width - font * 5.2)}, ${y0})`}
-                      >
-                        <rect
-                          width={font * (f.level_label.length * 0.62 + 0.9)}
-                          height={font * 1.45}
-                          rx={font * 0.3}
-                          fill={style.fill}
-                        />
-                        <text
-                          x={font * 0.45}
-                          y={font * 1.05}
-                          fontSize={font}
-                          fontWeight={700}
-                          fill="#0e1620"
-                        >
-                          {f.level_label}
-                        </text>
-                      </g>
-                    )}
-                    <title>{`${f.level_label}: ${f.severity}`}</title>
+                      className="cursor-pointer"
+                      onClick={() => onSelect(f)}
+                    >
+                      <title>{`${f.level_label}: ${f.severity}`}</title>
+                    </rect>
                   </g>
                 );
               })}
+              {showLabels &&
+                onImage.map((f, i) => {
+                  const rect = labels[i];
+                  const style = styleFor(f.severity);
+                  const selected = f.id === selectedId;
+                  const [bx, by] = nearestOnRect(
+                    f.box,
+                    (rect[0] + rect[2]) / 2,
+                    (rect[1] + rect[3]) / 2,
+                  );
+                  const [ex, ey] = nearestOnRect(rect, bx, by);
+                  const detached = Math.abs(ex - bx) + Math.abs(ey - by) > pad * 2;
+                  return (
+                    <g
+                      key={`label-${f.id}`}
+                      opacity={selectedId && !selected ? 0.55 : 1}
+                      className="cursor-pointer"
+                      onClick={() => onSelect(f)}
+                    >
+                      {detached && (
+                        <line
+                          x1={ex}
+                          y1={ey}
+                          x2={bx}
+                          y2={by}
+                          stroke={style.fill}
+                          strokeWidth={stroke * 0.8}
+                        />
+                      )}
+                      <rect
+                        x={rect[0]}
+                        y={rect[1]}
+                        width={rect[2] - rect[0]}
+                        height={rect[3] - rect[1]}
+                        rx={font * 0.3}
+                        fill={style.fill}
+                        stroke={selected ? "#ffffff" : "none"}
+                        strokeWidth={stroke * 0.6}
+                      />
+                      <text
+                        x={rect[0] + pad}
+                        y={rect[1] + font * 1.05}
+                        fontSize={font}
+                        fontWeight={700}
+                        fill="#0e1620"
+                      >
+                        {f.level_label}
+                      </text>
+                    </g>
+                  );
+                })}
             </svg>
           )}
         </div>

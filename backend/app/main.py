@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from app.api.routes import cases, chat, health, scans
 from app.core.config import get_settings
@@ -29,9 +30,20 @@ def create_app() -> FastAPI:
         title=settings.app_name,
         version=settings.version,
         lifespan=lifespan,
-        docs_url="/api/docs",
-        openapi_url="/api/openapi.json",
+        docs_url="/docs",
+        redoc_url="/redoc",
+        openapi_url="/openapi.json",
+        description="Lumbar spine MRI grading API. Interactive docs: /docs (Swagger) and /redoc.",
     )
+
+    @app.get("/api/docs", include_in_schema=False)
+    def docs_redirect():
+        return RedirectResponse("/docs")
+
+    @app.get("/", include_in_schema=False)
+    def root():
+        return {"app": settings.app_name, "docs": "/docs", "health": "/health"}
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.allowed_origins,

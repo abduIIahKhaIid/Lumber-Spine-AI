@@ -103,7 +103,7 @@ class RouteEvent:
 async def route(system: str, history: list[dict], image: str | None) -> AsyncIterator[RouteEvent]:
     """Yield deltas from the first candidate that answers; report every attempt as a step."""
     steps: list[Step] = []
-    chain = providers.candidates()
+    chain = providers.candidates(vision=image is not None)
     if not chain:
         yield RouteEvent(
             "exhausted",

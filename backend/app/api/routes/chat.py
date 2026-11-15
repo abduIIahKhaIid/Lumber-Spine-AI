@@ -23,6 +23,8 @@ class ThreadCreate(BaseModel):
     title: str = Field(default=service.DEFAULT_TITLE, max_length=120)
     language: Language = "english"
     case_context: dict | None = None
+    # Small annotated slice shown on the attached-result card (never sent to the model).
+    preview_image: str | None = Field(default=None, max_length=3_000_000)
 
 
 class ThreadUpdate(BaseModel):
@@ -75,9 +77,13 @@ def list_threads(q: str = Query(default="", max_length=100)):
 
 @router.post("/threads", status_code=201)
 def create_thread(body: ThreadCreate):
-    return store.create_thread(
-        body.title.strip() or service.DEFAULT_TITLE, body.language, clean_case(body.case_context)
-    )
+    case = clean_case(body.case_context)
+    if case and body.preview_image:
+        try:
+            case["preview"] = prepare_image(body.preview_image, max_side=720)
+        except ChatInputError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    return store.create_thread(body.title.strip() or service.DEFAULT_TITLE, body.language, case)
 
 
 @router.get("/threads/{thread_id}")

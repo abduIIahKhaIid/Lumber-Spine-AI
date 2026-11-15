@@ -36,6 +36,7 @@ def clean_case(value) -> dict | None:
                 "id": _text(item.get("id"), 8),
                 "condition": _text(item.get("condition_name") or item.get("condition"), 40),
                 "level": _text(item.get("level_label") or item.get("level"), 16),
+                "side": _text(item.get("side"), 8) or None,
                 "severity": _text(item.get("severity"), 16),
                 "scores": {
                     _text(k, 16): round(float(v), 3)
@@ -60,7 +61,9 @@ def clean_case(value) -> dict | None:
             )
     return {
         "condition": _text(value.get("condition_name") or value.get("condition"), 40),
+        "plane": _text(value.get("plane"), 16),
         "sequence": _text(value.get("sequence"), 16),
+        "mode": _text(value.get("mode"), 8),
         "findings": findings,
         "quality": {
             "status": _text(quality.get("status"), 16),
@@ -89,12 +92,13 @@ def system_prompt(language: str, case: dict | None) -> str:
         else " Reply in English unless the user writes in another language."
     )
     if case:
+        data = {key: value for key, value in case.items() if key != "preview"}
         prompt += "\n\nScan context (model output, not a validated diagnosis):\n"
-        prompt += json.dumps(case, ensure_ascii=False, separators=(",", ":"))
+        prompt += json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     return prompt
 
 
-def prepare_image(encoded: str | None) -> str | None:
+def prepare_image(encoded: str | None, max_side: int = 1600) -> str | None:
     """Validate an uploaded image and re-encode it as a bounded JPEG (strips metadata)."""
     if not encoded:
         return None
@@ -108,7 +112,7 @@ def prepare_image(encoded: str | None) -> str | None:
         if image.width * image.height > 40_000_000:
             raise ChatInputError("Image dimensions are too large.")
         image = image.convert("RGB")
-        image.thumbnail((1600, 1600))
+        image.thumbnail((max_side, max_side))
         output = BytesIO()
         image.save(output, format="JPEG", quality=86)
         return base64.b64encode(output.getvalue()).decode("ascii")

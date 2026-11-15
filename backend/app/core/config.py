@@ -91,6 +91,15 @@ class Settings:
     llm_fallback_order: list[str] = field(
         default_factory=lambda: _list("LLM_FALLBACK_ORDER", "groq,gemini,ollama")
     )
+    # Messages with an attached image go to vision-capable models in this order.
+    llm_vision_order: list[str] = field(
+        default_factory=lambda: _list("LLM_VISION_ORDER", "gemini,groq,ollama")
+    )
+    groq_vision_models: list[str] = field(
+        default_factory=lambda: _list(
+            "GROQ_VISION_MODELS", "meta-llama/llama-4-scout-17b-16e-instruct"
+        )
+    )
     llm_timeout_seconds: int = field(default_factory=lambda: _int("LLM_TIMEOUT_SECONDS", 90))
 
     # Local single-reviewer case library.

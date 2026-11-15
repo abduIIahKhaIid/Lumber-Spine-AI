@@ -53,7 +53,7 @@ const COPY: Record<
       "Upload a ZIP with every slice of one series. Three models locate the levels in 3D, refine their position and grade each level.",
     accept: ".zip,application/zip",
     hint: [
-      "One series per ZIP, up to 120 MB",
+      "A ZIP, a folder or the .dcm slices of one series, up to 120 MB",
       "Sagittal T1, sagittal T2/STIR or axial T2",
       "Identifiers are removed in memory",
       "Uploads are deleted after analysis",
@@ -111,6 +111,8 @@ export default function ScanStudio({ mode }: { mode: ScanMode }) {
   );
 }
 
+const IMAGE_TYPES = /\.(png|jpe?g|webp|bmp|gif|tiff?)$/i;
+
 function Dropzone({
   mode,
   accept,
@@ -120,34 +122,69 @@ function Dropzone({
   mode: ScanMode;
   accept: string;
   error?: string;
-  onFile: (file: File) => void;
+  onFile: (files: File[]) => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
+  const folder = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [local, setLocal] = useState("");
   const Icon = mode === "multi" ? FileArchive : FileImage;
 
-  function choose(next: File | undefined) {
+  useEffect(() => {
+    // Folder picking is a non-standard attribute, so it is set on the element directly.
+    folder.current?.setAttribute("webkitdirectory", "");
+  }, []);
+
+  function choose(list: FileList | File[] | null | undefined) {
     setLocal("");
-    if (!next) return;
-    const name = next.name.toLowerCase();
-    const ok =
-      mode === "multi" ? name.endsWith(".zip") : name.endsWith(".dcm") || !name.includes(".");
-    if (!ok) {
-      setFile(null);
-      setLocal(mode === "multi" ? "Choose a .zip archive of one series." : "Choose a .dcm file.");
+    const picked = Array.from(list ?? []).filter(
+      (f) => !f.name.startsWith(".") && f.name.toLowerCase() !== "dicomdir",
+    );
+    if (!picked.length) return;
+    if (picked.some((f) => IMAGE_TYPES.test(f.name))) {
+      setFiles([]);
+      setLocal(
+        "PNG and JPG images cannot be graded: the models need DICOM (.dcm) files, which record the plane and sequence. Export the scan as DICOM, or ask about a picture in the Assistant.",
+      );
       return;
     }
-    if (next.size > 120 * 1024 * 1024) {
-      setFile(null);
-      setLocal("The file is larger than 120 MB.");
+    const zips = picked.filter((f) => f.name.toLowerCase().endsWith(".zip"));
+    const dicoms = picked.filter((f) => !f.name.toLowerCase().endsWith(".zip"));
+    let next: File[] = [];
+    if (mode === "single") {
+      if (picked.length !== 1 || zips.length) {
+        setLocal(
+          "Choose one .dcm file here. For a ZIP or several slices, use Full series instead.",
+        );
+        setFiles([]);
+        return;
+      }
+      next = picked;
+    } else if (zips.length === 1 && picked.length === 1) {
+      next = zips;
+    } else if (!zips.length && dicoms.length >= 3) {
+      next = dicoms;
+    } else {
+      setFiles([]);
+      setLocal(
+        zips.length
+          ? "Choose one ZIP, or the slices themselves, not both."
+          : "A series needs at least 3 DICOM slices. For one file, use Single slice.",
+      );
       return;
     }
-    setFile(next);
+    const size = next.reduce((total, f) => total + f.size, 0);
+    if (size > 120 * 1024 * 1024) {
+      setFiles([]);
+      setLocal("The upload is larger than 120 MB. Upload one series at a time.");
+      return;
+    }
+    setFiles(next);
   }
 
   const message = local || error;
+  const size = files.reduce((total, f) => total + f.size, 0);
   return (
     <div className="panel p-3">
       <div
@@ -159,7 +196,7 @@ function Dropzone({
         onDrop={(event) => {
           event.preventDefault();
           setDragging(false);
-          choose(event.dataTransfer.files[0]);
+          choose(event.dataTransfer.files);
         }}
         className={clsx(
           "film flex min-h-[320px] flex-col items-center justify-center gap-4 border-2 border-dashed p-8 text-center transition-colors",
@@ -169,29 +206,53 @@ function Dropzone({
         <UploadCloud size={40} className="text-slate-300" />
         <div>
           <p className="text-lg font-semibold text-white">
-            Drop {mode === "multi" ? "a series ZIP" : "a DICOM slice"} here
+            {mode === "multi"
+              ? "Drop a series ZIP or its DICOM slices here"
+              : "Drop a DICOM slice here"}
           </p>
-          <p className="mt-1 text-sm text-slate-400">or choose it from your computer</p>
+          <p className="mt-1 text-sm text-slate-400">or choose from your computer</p>
         </div>
-        <button type="button" className="btn btn-quiet" onClick={() => input.current?.click()}>
-          Choose file
-        </button>
+        <div className="flex flex-wrap justify-center gap-2">
+          <button type="button" className="btn btn-quiet" onClick={() => input.current?.click()}>
+            {mode === "multi" ? "Choose ZIP or files" : "Choose file"}
+          </button>
+          {mode === "multi" && (
+            <button type="button" className="btn btn-quiet" onClick={() => folder.current?.click()}>
+              Choose folder
+            </button>
+          )}
+        </div>
         <input
           ref={input}
           type="file"
-          accept={accept}
+          accept={mode === "multi" ? ".zip,.dcm,application/zip,application/dicom" : accept}
+          multiple={mode === "multi"}
           className="sr-only"
-          onChange={(event) => choose(event.target.files?.[0])}
+          onChange={(event) => {
+            choose(event.target.files);
+            event.target.value = "";
+          }}
+        />
+        <input
+          ref={folder}
+          type="file"
+          className="sr-only"
+          onChange={(event) => {
+            choose(event.target.files);
+            event.target.value = "";
+          }}
         />
       </div>
-      {file && (
+      {files.length > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl bg-bone p-3">
           <Icon size={22} className="text-cobalt" />
           <div className="min-w-0 flex-1">
-            <p className="truncate font-semibold">{file.name}</p>
-            <p className="text-sm text-graphite">{(file.size / 1024 / 1024).toFixed(1)} MB</p>
+            <p className="truncate font-semibold">
+              {files.length === 1 ? files[0].name : `${files.length} DICOM slices`}
+            </p>
+            <p className="text-sm text-graphite">{(size / 1024 / 1024).toFixed(1)} MB</p>
           </div>
-          <button type="button" className="btn btn-primary" onClick={() => onFile(file)}>
+          <button type="button" className="btn btn-primary" onClick={() => onFile(files)}>
             Analyze {mode === "multi" ? "series" : "slice"}
           </button>
         </div>
@@ -270,6 +331,23 @@ function Progress({
   );
 }
 
+/** Downscale a base64 PNG to a JPEG of at most `side` pixels (for the chat attachment card). */
+function shrink(png: string, side: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      const scale = Math.min(1, side / Math.max(image.width, image.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(image.width * scale);
+      canvas.height = Math.round(image.height * scale);
+      canvas.getContext("2d")?.drawImage(image, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/jpeg", 0.85).split(",", 2)[1] ?? "");
+    };
+    image.onerror = () => reject(new Error("The preview image could not be prepared."));
+    image.src = `data:image/png;base64,${png}`;
+  });
+}
+
 function Results({
   result,
   jobId,
@@ -312,6 +390,7 @@ function Results({
   async function askAssistant() {
     setAsking(true);
     try {
+      const image = result.images[selected?.image_index ?? 0] ?? result.images[0];
       const thread = await api<{ id: string }>(
         "/api/chat/threads",
         jsonBody({
@@ -319,12 +398,15 @@ function Results({
           case_context: {
             condition: result.condition,
             condition_name: result.condition_name,
+            plane: result.plane,
             sequence: result.sequence,
-            // Pixels and focus maps stay in the browser; only structured findings are shared.
+            mode: result.mode,
+            // Focus maps stay in the browser; the model only receives structured findings.
             findings: findings.map(({ explanation: _drop, ...rest }) => rest),
             quality: result.quality,
             recommendations: result.recommendations,
           },
+          preview_image: image ? await shrink(image.annotated, 720) : null,
         }),
       );
       router.push(`/assistant?thread=${thread.id}`);

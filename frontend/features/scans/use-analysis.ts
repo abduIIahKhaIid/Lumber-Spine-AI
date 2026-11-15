@@ -13,7 +13,7 @@ type Phase =
 
 const storageKey = (mode: ScanMode) => `spinescope.job.${mode}`;
 
-function upload(mode: ScanMode, file: File, onProgress: (value: number) => void) {
+function upload(mode: ScanMode, files: File[], onProgress: (value: number) => void) {
   return new Promise<{ job_id: string }>((resolve, reject) => {
     const request = new XMLHttpRequest();
     request.open("POST", apiUrl(`/api/scans/${mode}`));
@@ -33,7 +33,7 @@ function upload(mode: ScanMode, file: File, onProgress: (value: number) => void)
     request.onerror = () =>
       reject(new Error("The analysis server is not reachable. Start the backend and try again."));
     const form = new FormData();
-    form.append("file", file);
+    for (const file of files) form.append("files", file, file.name);
     request.send(form);
   });
 }
@@ -93,11 +93,11 @@ export function useAnalysis(mode: ScanMode) {
   }, [mode, poll]);
 
   const start = useCallback(
-    async (file: File) => {
+    async (files: File[]) => {
       const token = ++run.current;
       setPhase({ name: "uploading", progress: 0 });
       try {
-        const { job_id } = await upload(mode, file, (progress) => {
+        const { job_id } = await upload(mode, files, (progress) => {
           if (run.current === token) setPhase({ name: "uploading", progress });
         });
         sessionStorage.setItem(storageKey(mode), job_id);

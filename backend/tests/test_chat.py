@@ -31,7 +31,9 @@ def chain(monkeypatch):
             providers, "ADAPTERS", {k: fake_adapter(v) for k, v in adapters.items()}
         )
         monkeypatch.setattr(
-            providers, "candidates", lambda: [Candidate(name, f"{name}-model") for name in adapters]
+            providers,
+            "candidates",
+            lambda vision=False: [Candidate(name, f"{name}-model") for name in adapters],
         )
 
     return install
@@ -144,3 +146,41 @@ def test_empty_message_rejected_and_no_provider_configured():
         events = sse(client.post(f"/api/chat/threads/{tid}/messages", json={"content": "hi"}))
         assert any(e["type"] == "error" for e in events)
         assert client.get("/api/chat/providers").json()["chain"] == []
+
+
+def test_image_messages_use_the_vision_chain(monkeypatch):
+    from app.core import config
+
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setenv("GROQ_MODEL", "text-only-model")
+    config.get_settings.cache_clear()
+    text_chain = [(c.provider, c.model) for c in providers.candidates()]
+    vision_chain = [(c.provider, c.model) for c in providers.candidates(vision=True)]
+    assert text_chain[0] == ("groq", "text-only-model")
+    assert vision_chain[0][0] == "gemini"
+    assert ("groq", "text-only-model") not in vision_chain
+
+
+def test_result_preview_is_stored_but_never_sent_to_the_model(chain, sample_result):
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    from app.services.chat.context import system_prompt
+
+    buffer = BytesIO()
+    Image.new("RGB", (900, 600), "gray").save(buffer, format="PNG")
+    preview = base64.b64encode(buffer.getvalue()).decode()
+    chain(groq=["ok"])
+    with TestClient(create_app()) as client:
+        thread = client.post(
+            "/api/chat/threads",
+            json={"case_context": sample_result, "preview_image": preview},
+        ).json()
+        stored = client.get(f"/api/chat/threads/{thread['id']}").json()["case_context"]
+    shrunk = Image.open(BytesIO(base64.b64decode(stored["preview"])))
+    assert max(shrunk.size) == 720 and shrunk.format == "JPEG"
+    assert "preview" not in system_prompt("english", stored).split("Scan context")[1]
+    assert stored["preview"][:20] not in system_prompt("english", stored)

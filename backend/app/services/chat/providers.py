@@ -222,16 +222,18 @@ def configured(provider: str) -> bool:
     }.get(provider, False)
 
 
-def candidates() -> list[Candidate]:
+def candidates(vision: bool = False) -> list[Candidate]:
+    """Fallback chain. With an image, only vision-capable models in LLM_VISION_ORDER."""
     settings = get_settings()
     models = {
-        "groq": settings.groq_models,
+        "groq": settings.groq_vision_models if vision else settings.groq_models,
         "gemini": settings.gemini_models,
         "ollama": settings.ollama_models,
     }
+    order = settings.llm_vision_order if vision else settings.llm_fallback_order
     return [
         Candidate(provider, model)
-        for provider in settings.llm_fallback_order
+        for provider in order
         if provider in ADAPTERS and configured(provider)
         for model in models[provider]
     ]

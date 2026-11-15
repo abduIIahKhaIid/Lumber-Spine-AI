@@ -31,7 +31,7 @@ export type ThreadSummary = {
 };
 
 export type Thread = ThreadSummary & {
-  case_context: Record<string, unknown> | null;
+  case_context: import("./case-attachment").CaseContext | null;
   messages: ChatMessage[];
 };
 

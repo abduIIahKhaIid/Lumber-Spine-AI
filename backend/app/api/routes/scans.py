@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import uuid
+import zipfile
 from io import BytesIO
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -14,28 +15,58 @@ from app.core.security import rate_limited
 from app.jobs.queue import get_queue
 
 router = APIRouter(prefix="/api", tags=["scans"])
-EXTENSIONS = {"single": (".dcm", ".dicom", ""), "multi": (".zip",)}
 
 
-async def _save_upload(file: UploadFile, kind: str):
+async def _copy(upload: UploadFile, output, limit: int, size: int) -> int:
+    while chunk := await upload.read(1024 * 1024):
+        size += len(chunk)
+        if size > limit:
+            raise HTTPException(413, f"Upload exceeds {get_settings().max_upload_mb} MB.")
+        output.write(chunk)
+    return size
+
+
+def _suffix(upload: UploadFile) -> str:
+    name = (upload.filename or "").lower()
+    return "." + name.rsplit(".", 1)[1] if "." in name.rsplit("/", 1)[-1] else ""
+
+
+async def _save_upload(files: list[UploadFile], kind: str):
+    """One .dcm (single), or one .zip / several .dcm files of one series (multi)."""
     settings = get_settings()
-    name = (file.filename or "").lower()
-    suffix = "." + name.rsplit(".", 1)[1] if "." in name else ""
-    if suffix not in EXTENSIONS[kind]:
-        expected = "a .dcm DICOM file" if kind == "single" else "a .zip archive of one series"
-        raise HTTPException(415, f"Upload {expected}.")
+    suffixes = [_suffix(f) for f in files]
+    images = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+    if any(s in images for s in suffixes):
+        raise HTTPException(
+            415,
+            "PNG/JPG images cannot be graded: the models need DICOM (.dcm) files, which carry the "
+            "plane and sequence. Ask about a picture in the Assistant instead.",
+        )
+    if kind == "single" and (len(files) != 1 or suffixes[0] not in (".dcm", ".dicom", "")):
+        raise HTTPException(415, "Upload one .dcm DICOM file.")
+    zipped = kind == "multi" and len(files) == 1 and suffixes[0] == ".zip"
+    if kind == "multi" and not zipped and any(s not in (".dcm", ".dicom", "") for s in suffixes):
+        raise HTTPException(415, "Upload a .zip of one series, or the series' .dcm files.")
+    if kind == "multi" and not zipped and len(files) < 3:
+        raise HTTPException(400, "A series needs at least 3 slices. Use Single slice for one file.")
+
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     path = settings.upload_dir / f"{uuid.uuid4().hex}.{'zip' if kind == 'multi' else 'dcm'}"
     limit = settings.max_upload_mb * 1024 * 1024
     size = 0
-    with path.open("wb") as output:
-        while chunk := await file.read(1024 * 1024):
-            size += len(chunk)
-            if size > limit:
-                output.close()
-                path.unlink(missing_ok=True)
-                raise HTTPException(413, f"Upload exceeds {settings.max_upload_mb} MB.")
-            output.write(chunk)
+    try:
+        if kind == "multi" and not zipped:
+            # Loose slices are packed into one archive so the worker sees a normal series ZIP.
+            with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as archive:
+                for index, upload in enumerate(files):
+                    with archive.open(f"slice-{index:04d}.dcm", "w") as output:
+                        size = await _copy(upload, output, limit, size)
+        else:
+            with path.open("wb") as output:
+                size = await _copy(files[0], output, limit, size)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
     if size == 0:
         path.unlink(missing_ok=True)
         raise HTTPException(400, "The uploaded file is empty.")
@@ -43,10 +74,19 @@ async def _save_upload(file: UploadFile, kind: str):
 
 
 @router.post("/scans/{kind}", status_code=202, dependencies=[Depends(rate_limited("scan"))])
-async def submit_scan(kind: str, file: UploadFile = File(...)):
-    if kind not in EXTENSIONS:
+async def submit_scan(
+    kind: str,
+    file: UploadFile | None = File(default=None),
+    files: list[UploadFile] | None = File(default=None),
+):
+    if kind not in ("single", "multi"):
         raise HTTPException(404, "Unknown scan workflow")
-    path = await _save_upload(file, kind)
+    uploads = [f for f in ([file] if file else []) + (files or []) if f is not None]
+    if not uploads:
+        raise HTTPException(400, "Choose a file to upload.")
+    if len(uploads) > 1000:
+        raise HTTPException(413, "Too many files. Upload one series at a time.")
+    path = await _save_upload(uploads, kind)
     queue = get_queue()
     try:
         job_id = queue.submit(kind, path)

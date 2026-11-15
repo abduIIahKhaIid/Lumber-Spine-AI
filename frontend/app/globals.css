@@ -30,35 +30,38 @@
   --radius-control: 10px;
 }
 
-:root {
-  color-scheme: light;
-}
+/* Base rules live in a layer so Tailwind utilities (e.g. outline-none) can override them. */
+@layer base {
+  :root {
+    color-scheme: light;
+  }
 
-html {
-  background: var(--color-bone);
-  color: var(--color-ink);
-  font-family: var(--font-sans);
-  font-feature-settings: "tnum" 1;
-  -webkit-font-smoothing: antialiased;
-}
+  html {
+    background: var(--color-bone);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-feature-settings: "tnum" 1;
+    -webkit-font-smoothing: antialiased;
+  }
 
-body {
-  min-height: 100dvh;
-}
+  body {
+    min-height: 100dvh;
+  }
 
-::selection {
-  background: #c9d7f5;
-}
+  ::selection {
+    background: #c9d7f5;
+  }
 
-:focus-visible {
-  outline: 3px solid var(--color-cobalt);
-  outline-offset: 2px;
-  border-radius: 6px;
-}
+  :focus-visible {
+    outline: 3px solid var(--color-cobalt);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
 
-button:not(:disabled),
-[role="button"] {
-  cursor: pointer;
+  button:not(:disabled),
+  [role="button"] {
+    cursor: pointer;
+  }
 }
 
 /* Shared building blocks kept deliberately few; layout lives in components. */

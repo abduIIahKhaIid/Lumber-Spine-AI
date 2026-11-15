@@ -73,7 +73,7 @@ export default function Composer({
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 pb-4">
-      <div className="rounded-2xl border border-rule bg-paper p-2 shadow-[0_1px_0_#d5dce3] focus-within:border-cobalt">
+      <div className="rounded-2xl border border-rule bg-paper p-2 shadow-[0_1px_2px_rgba(20,33,46,0.06)] focus-within:border-[#9aa8b6]">
         {attachment && (
           <div className="mb-2 flex items-center gap-2 rounded-xl bg-bone p-2">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -110,7 +110,7 @@ export default function Composer({
               submit();
             }
           }}
-          className="block max-h-[220px] w-full resize-none bg-transparent px-2 py-2 leading-relaxed outline-none"
+          className="block max-h-[220px] w-full resize-none bg-transparent px-2 py-2 leading-relaxed outline-none focus:outline-none focus-visible:outline-none"
         />
         <div className="flex items-center gap-1">
           <button

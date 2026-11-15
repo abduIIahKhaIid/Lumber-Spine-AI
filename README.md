@@ -77,7 +77,7 @@ Needs only Docker Desktop (Windows/macOS) or Docker Engine with Compose v2 (Linu
 3. Start the stack:
    - Windows: double-click `docker-start.bat` (stop with `docker-stop.bat`)
    - Any OS: `docker compose up -d --build`
-4. Open http://localhost:3000. The API is on http://localhost:8000 (`/api/docs`, `/ready`).
+4. Open http://localhost:3000. The FastAPI backend is on http://localhost:8000 (docs at `/docs`, health at `/ready`).
 
 | Service | Role |
 | --- | --- |
