@@ -24,16 +24,16 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4.3.5",
+    "@tailwindcss/postcss": "4.3.3",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "prettier": "^3.6.2",
-    "tailwindcss": "^4.3.5",
+    "tailwindcss": "4.3.3",
     "typescript": "^5.9.3"
   },
   "engines": {
-    "node": ">=20.9"
+    "node": ">=20.19"
   },
   "overrides": {
     "postcss": "^8.5.23"

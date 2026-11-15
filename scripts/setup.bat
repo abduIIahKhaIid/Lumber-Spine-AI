@@ -18,6 +18,10 @@ pushd "%BACKEND%"
 popd
 if not exist "%BACKEND%\.env" copy "%BACKEND%\.env.example" "%BACKEND%\.env" >nul
 
+node -e "const [a,b]=process.versions.node.split('.').map(Number);process.exit(a>22||(a===22&&b>=12)||(a===20&&b>=19)?0:1)" >nul 2>&1
+if errorlevel 1 (
+  echo Note: Node.js 22 LTS is recommended ^(you have an older version^). Get it from https://nodejs.org
+)
 pushd "%FRONTEND%"
 rem Remove the old build cache so styles are rebuilt with the new packages.
 if exist ".next" rmdir /s /q ".next"

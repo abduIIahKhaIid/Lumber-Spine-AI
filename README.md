@@ -62,7 +62,7 @@ docker-compose.yml      redis + api + worker + web
 
 ### Windows (double-click)
 
-1. Install Python 3.12 and Node.js 22.
+1. Install Python 3.12 and Node.js 22 LTS (20.19 or newer works).
 2. Run `scripts\setup.bat` once.
 3. Copy the checkpoints into `backend\model` (see `backend/model/README.md`).
 4. Add at least one of `GROQ_API_KEY`, `GEMINI_API_KEY` or `OLLAMA_BASE_URL` to `backend\.env`.
