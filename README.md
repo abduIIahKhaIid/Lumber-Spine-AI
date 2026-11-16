@@ -75,8 +75,10 @@ Needs only Docker Desktop (Windows/macOS) or Docker Engine with Compose v2 (Linu
 1. Copy the checkpoints into `backend/model`.
 2. Copy `backend/.env.example` to `backend/.env` and add your API keys (optional, for the assistant).
 3. Start the stack:
-   - Windows: double-click `docker-start.bat` (stop with `docker-stop.bat`)
-   - Any OS: `docker compose up -d --build`
+   - Windows: double-click `docker-start.bat` (stop with `docker-stop.bat`). It downloads the
+     images GitHub CI built; after changing code locally use `docker-rebuild.bat`.
+   - Any OS: `docker compose pull` then `docker compose up -d`
+     (or `docker compose up -d --build` to build from local code)
 4. Open http://localhost:3000. The FastAPI backend is on http://localhost:8000 (docs at `/docs`, health at `/ready`).
 
 | Service | Role |
@@ -88,7 +90,14 @@ Needs only Docker Desktop (Windows/macOS) or Docker Engine with Compose v2 (Linu
 
 Notes:
 
-- The first build downloads CPU PyTorch and takes 10–20 minutes; later starts take seconds.
+- Builds are cached: dependencies (PyTorch, Node packages) sit in their own layers and in
+  BuildKit cache mounts, so after the first build a code change rebuilds in seconds. The very
+  first local build still downloads CPU PyTorch (10–20 minutes on a slow connection);
+  `docker compose pull` avoids it by downloading the images CI already built.
+- The CI images live at `ghcr.io/abduiiahkhaiid/lumber-spine-ai-{api,worker,web}`. If
+  `docker compose pull` reports "denied", make each package public once on GitHub
+  (Profile → Packages → package → Package settings → Change visibility) or run
+  `docker login ghcr.io` with a personal access token that has `read:packages`.
 - The worker keeps all checkpoints in memory (about 3 GB). On Windows, give Docker Desktop at
   least 6 GB of memory (Settings → Resources, or `.wslconfig` for WSL 2).
 - Stop `run-project.bat` windows first; both use ports 3000 and 8000.

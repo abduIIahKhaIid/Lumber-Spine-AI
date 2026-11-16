@@ -1,7 +1,12 @@
+# Build speed: npm packages are installed in their own layer (re-run only when
+# package-lock.json changes), and npm's download cache and Next.js' build cache are kept
+# in BuildKit cache mounts between builds.
+
 FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-audit --no-fund --prefer-offline
 
 FROM node:22-alpine AS build
 WORKDIR /app
@@ -11,7 +16,8 @@ ARG NEXT_PUBLIC_API_ORIGIN=http://localhost:8000
 ENV NEXT_PUBLIC_API_ORIGIN=$NEXT_PUBLIC_API_ORIGIN
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npm run build
+RUN --mount=type=cache,target=/app/.next/cache \
+    npm run build
 
 FROM node:22-alpine AS runtime
 WORKDIR /app

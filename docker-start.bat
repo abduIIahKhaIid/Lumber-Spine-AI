@@ -1,7 +1,9 @@
 @echo off
 setlocal
 title Lumber Spine AI - Docker
-rem Builds (first time) and starts redis, api, worker and web with Docker Compose.
+rem Starts redis, api, worker and web with Docker Compose.
+rem   docker-start.bat         use the images GitHub CI built (download, no build)
+rem   docker-start.bat build   rebuild from your local code (after you change code)
 cd /d "%~dp0"
 
 docker version >nul 2>&1
@@ -27,11 +29,25 @@ for %%M in (stage1_scs.pt stage2_scs.pt severity_model_full_scs.pth best_scs.pt 
 )
 if defined MISSING echo Analyses for the missing models will fail until the files are added.
 
+rem BuildKit + Bake: cached dependency layers and parallel builds.
+set "DOCKER_BUILDKIT=1"
+set "COMPOSE_BAKE=true"
+
+if /i "%~1"=="build" goto :build
 echo.
-echo Building and starting containers. The first build downloads PyTorch and can take
-echo 10-20 minutes; later starts take seconds.
+echo Downloading the images built by GitHub CI (fast). If they are not available,
+echo the missing ones are built on this computer instead.
+docker compose pull --ignore-pull-failures
+docker compose up -d
+goto :started
+
+:build
 echo.
+echo Rebuilding the images from your local code. Only changed layers are rebuilt;
+echo the first build downloads PyTorch and can take 10-20 minutes.
 docker compose up -d --build
+
+:started
 if errorlevel 1 (
   echo.
   echo Docker Compose failed. Read the messages above.

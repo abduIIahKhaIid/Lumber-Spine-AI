@@ -97,7 +97,7 @@ jobs:
           context: backend
           target: api
           load: true
-          tags: lumber-spine-ai/api:local
+          tags: ghcr.io/abduiiahkhaiid/lumber-spine-ai-api:latest
           cache-from: type=gha,scope=api
           cache-to: type=gha,mode=max,scope=api
       - name: Build worker image
@@ -106,7 +106,7 @@ jobs:
           context: backend
           target: worker
           load: true
-          tags: lumber-spine-ai/worker:local
+          tags: ghcr.io/abduiiahkhaiid/lumber-spine-ai-worker:latest
           cache-from: type=gha,scope=worker
           cache-to: type=gha,mode=max,scope=worker
       - name: Build web image
@@ -114,7 +114,7 @@ jobs:
         with:
           context: frontend
           load: true
-          tags: lumber-spine-ai/web:local
+          tags: ghcr.io/abduiiahkhaiid/lumber-spine-ai-web:latest
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
       - name: Start the stack without rebuilding

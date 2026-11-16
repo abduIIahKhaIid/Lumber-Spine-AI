@@ -1,7 +1,10 @@
 # Lumber Spine AI - full stack with Docker Compose
 #
 #   Windows: double-click docker-start.bat     (stop: docker-stop.bat)
-#   Any OS:  docker compose up -d --build      then open http://localhost:3000
+#   Any OS:  docker compose pull               download the images CI built (fastest)
+#            docker compose up -d              start; builds locally only what is missing
+#            docker compose up -d --build      rebuild after changing code locally
+#   Then open http://localhost:3000.
 #
 # Before the first start:
 #   1. Put the model checkpoints in backend/model   (see backend/model/README.md)
@@ -41,7 +44,7 @@ services:
 
   api:
     build: { context: ./backend, target: api }
-    image: lumber-spine-ai/api:local
+    image: ghcr.io/abduiiahkhaiid/lumber-spine-ai-api:latest
     env_file:
       - path: ./backend/.env
         required: false
@@ -60,7 +63,7 @@ services:
 
   worker:
     build: { context: ./backend, target: worker }
-    image: lumber-spine-ai/worker:local
+    image: ghcr.io/abduiiahkhaiid/lumber-spine-ai-worker:latest
     env_file:
       - path: ./backend/.env
         required: false
@@ -81,7 +84,7 @@ services:
       args:
         # The browser calls the API directly, so this is the address as seen from your browser.
         NEXT_PUBLIC_API_ORIGIN: http://localhost:8000
-    image: lumber-spine-ai/web:local
+    image: ghcr.io/abduiiahkhaiid/lumber-spine-ai-web:latest
     ports: ["3000:3000"]
     depends_on:
       api: { condition: service_healthy }
