@@ -10,7 +10,7 @@
       "Condition": {
         "StringEquals": {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": "repo:abduIIahKhaIid/Lumber-Spine-AI:environment:production"
+          "token.actions.githubusercontent.com:sub": "repo:abduIIahKhaIid@91344658/Lumber-Spine-AI@1459133201:environment:production"
         }
       }
     }

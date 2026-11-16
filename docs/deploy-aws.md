@@ -201,7 +201,9 @@ name `LumberSpine-GitHub-Deploy` -> Create role. Then:
 * Trust relationships -> **Edit trust policy** -> paste
   [`deploy/iam/github-trust-policy.json`](../deploy/iam/github-trust-policy.json) with
   `<ACCOUNT_ID>` replaced -> Update. (It allows only the `production` environment of this
-  repository.)
+  repository.) This repository was created after GitHub switched new repositories to
+  immutable OIDC subjects. Its subject includes the public owner ID `91344658` and repository
+  ID `1459133201`; do not remove those IDs from the policy.
 * Add permissions -> Create inline policy -> JSON -> paste
   [`deploy/iam/github-deploy-policy.json`](../deploy/iam/github-deploy-policy.json) with
   `<REGION>`, `<ACCOUNT_ID>`, `<INSTANCE_ID>` replaced -> name `lumber-spine-ai-deploy`.
@@ -209,7 +211,8 @@ name `LumberSpine-GitHub-Deploy` -> Create role. Then:
 * Copy the role **ARN**.
 
 **GitHub:** repository -> Settings -> **Environments** -> New environment `production` ->
-Configure (no reviewers: deploys are automatic). Then Settings -> **Secrets and variables ->
+Configure (no reviewers: deploys are automatic). Restrict deployment branches to `main`.
+Then Settings -> **Secrets and variables ->
 Actions -> Variables** tab -> New repository variable, four times:
 
 | Name | Value |
