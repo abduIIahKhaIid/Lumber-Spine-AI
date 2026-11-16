@@ -8,6 +8,7 @@ from app.core import config
 from app.core.security import limiter
 from app.db import database
 from app.jobs import queue
+from app.services.chat import providers
 from app.services.chat.router import cooldowns
 from app.services.chat.runs import runs
 
@@ -27,6 +28,7 @@ def isolated(tmp_path, monkeypatch):
     limiter.reset()
     cooldowns.clear()
     runs.clear()
+    providers._ollama_checked.clear()
     yield
     runs.clear()
     config.get_settings.cache_clear()

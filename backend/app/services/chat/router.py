@@ -8,11 +8,13 @@ message does not wait on a provider that just failed.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from threading import Lock
 
+from app.core.config import get_settings
 from app.services.chat import providers
 from app.services.chat.providers import Candidate, ProviderFailure
 
@@ -25,6 +27,13 @@ COOLDOWN_SECONDS = {
     "not_found": 3600,
     "bad_request": 0,  # request-specific (e.g. an image to a text-only model): no cooldown
 }
+# Ollama is the user's own server: a missing model is fixed with `ollama pull` and a refused
+# connection by restarting the tunnel, usually within a minute. Long cloud-style cooldowns
+# would keep it out of the chain long after it works again, so they are short here, and a
+# cooling Ollama model is re-checked (see `providers.ollama_has_model`) before it is skipped.
+PROVIDER_COOLDOWN_SECONDS = {"ollama": {"not_found": 60, "auth": 60}}
+# Failures that a quick Ollama check can clear early.
+RECHECKABLE = {"not_found", "auth", "unavailable", "timeout"}
 FRIENDLY = {
     "rate_limit": "rate limit reached",
     "timeout": "timed out",
@@ -38,7 +47,7 @@ FRIENDLY = {
 
 class Cooldowns:
     def __init__(self):
-        self._until: dict[str, float] = {}
+        self._until: dict[str, tuple[float, str]] = {}
         self._lock = Lock()
 
     @staticmethod
@@ -48,17 +57,34 @@ class Cooldowns:
     def blocked(self, candidate: Candidate) -> float:
         now = time.monotonic()
         with self._lock:
-            return max((self._until.get(key, 0) - now for key in self._keys(candidate)), default=0)
+            return max(
+                0.0,
+                *(self._until.get(key, (0, ""))[0] - now for key in self._keys(candidate)),
+            )
+
+    def reason(self, candidate: Candidate) -> str:
+        """The failure kind behind the longest active cooldown of this candidate."""
+        now = time.monotonic()
+        with self._lock:
+            active = [self._until[k] for k in self._keys(candidate) if k in self._until]
+        active = [entry for entry in active if entry[0] > now]
+        return max(active)[1] if active else ""
 
     def penalize(self, candidate: Candidate, failure: ProviderFailure) -> None:
-        seconds = failure.retry_after or COOLDOWN_SECONDS.get(failure.kind, 30)
+        table = {**COOLDOWN_SECONDS, **PROVIDER_COOLDOWN_SECONDS.get(candidate.provider, {})}
+        seconds = failure.retry_after or table.get(failure.kind, 30)
         if seconds <= 0:
             return
         provider_key, model_key = self._keys(candidate)
         # Keys and quota are per provider; a missing model or overload is per model.
         key = provider_key if failure.kind in ("auth",) else model_key
         with self._lock:
-            self._until[key] = time.monotonic() + min(seconds, 3600)
+            self._until[key] = (time.monotonic() + min(seconds, 3600), failure.kind)
+
+    def lift(self, candidate: Candidate) -> None:
+        with self._lock:
+            for key in self._keys(candidate):
+                self._until.pop(key, None)
 
     def clear(self) -> None:
         with self._lock:
@@ -67,10 +93,40 @@ class Cooldowns:
     def snapshot(self) -> dict[str, int]:
         now = time.monotonic()
         with self._lock:
-            return {k: int(v - now) for k, v in self._until.items() if v > now}
+            return {k: int(v[0] - now) for k, v in self._until.items() if v[0] > now}
+
+
+async def _recovered(candidate: Candidate) -> bool:
+    """A cooling Ollama model that is reachable and pulled again is tried right away."""
+    if candidate.provider != "ollama" or cooldowns.reason(candidate) not in RECHECKABLE:
+        return False
+    if await providers.ollama_has_model(candidate.model):
+        cooldowns.lift(candidate)
+        return True
+    return False
 
 
 cooldowns = Cooldowns()
+
+
+async def _pieces(candidate: Candidate, system: str, history: list[dict], image: str | None):
+    """The adapter's stream, failing with `timeout` when the model sends nothing for
+    LLM_TIMEOUT_SECONDS (default 90): before its first token (thinking counts) or mid-answer.
+    The router then moves on to the next model."""
+    limit = get_settings().llm_timeout_seconds
+    stream = providers.ADAPTERS[candidate.provider](candidate.model, system, history, image)
+    try:
+        while True:
+            try:
+                piece = await asyncio.wait_for(anext(stream), timeout=limit)
+            except StopAsyncIteration:
+                return
+            except TimeoutError as exc:
+                raise ProviderFailure("timeout", f"no response in {limit} s") from exc
+            yield piece
+    finally:
+        with contextlib.suppress(Exception):
+            await stream.aclose()
 
 
 @dataclass
@@ -113,6 +169,9 @@ async def route(system: str, history: list[dict], image: str | None) -> AsyncIte
         return
     # Candidates in cooldown go last instead of being dropped, so a fully cooled-down
     # chain still gets one real attempt.
+    for candidate in chain:
+        if cooldowns.blocked(candidate) > 0:
+            await _recovered(candidate)
     ready = [c for c in chain if cooldowns.blocked(c) <= 0]
     waiting = [c for c in chain if cooldowns.blocked(c) > 0]
     for candidate in waiting:
@@ -129,9 +188,7 @@ async def route(system: str, history: list[dict], image: str | None) -> AsyncIte
         produced = answered = False
         yield RouteEvent("start", candidate=candidate)
         try:
-            async for piece in providers.ADAPTERS[candidate.provider](
-                candidate.model, system, history, image
-            ):
+            async for piece in _pieces(candidate, system, history, image):
                 kind, text = piece if isinstance(piece, tuple) else (providers.TEXT, piece)
                 if not text:
                     continue
@@ -149,7 +206,9 @@ async def route(system: str, history: list[dict], image: str | None) -> AsyncIte
                 candidate.provider,
                 candidate.model,
                 "failed",
-                FRIENDLY.get(failure.kind, str(failure)),
+                str(failure)
+                if failure.kind == "timeout"
+                else FRIENDLY.get(failure.kind, str(failure)),
                 int((time.monotonic() - started) * 1000),
             )
             steps.append(step)

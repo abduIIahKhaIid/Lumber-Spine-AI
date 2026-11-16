@@ -95,6 +95,13 @@ def provider_status():
     }
 
 
+@router.delete("/providers/cooldowns", dependencies=[Depends(rate_limited("chat"))])
+def clear_cooldowns():
+    """Retry every provider on the next message (e.g. after `ollama pull`), no restart needed."""
+    cooldowns.clear()
+    return {"cooldowns": cooldowns.snapshot()}
+
+
 @router.get("/threads")
 def list_threads(q: str = Query(default="", max_length=100)):
     running = runs.running_ids()

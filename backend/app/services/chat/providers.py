@@ -10,6 +10,7 @@ import base64
 import contextlib
 import json
 import re
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
@@ -295,6 +296,42 @@ async def stream_gemini(model, system, history, image) -> AsyncIterator[tuple[st
 
 
 ADAPTERS = {"groq": stream_groq, "gemini": stream_gemini, "ollama": stream_ollama}
+
+
+_ollama_checked: dict[str, tuple[float, set[str]]] = {}
+OLLAMA_CHECK_EVERY = 10.0  # seconds; the check runs before answers, so keep it rare and quick
+
+
+def _ollama_names(model: str) -> set[str]:
+    return {model, model if ":" in model else f"{model}:latest"}
+
+
+async def ollama_has_model(model: str) -> bool:
+    """Whether the Ollama server answers and lists `model` (GET /api/tags, 3 s, cached 10 s)."""
+    settings = get_settings()
+    base = settings.ollama_base_url
+    if not base:
+        return False
+    now = time.monotonic()
+    checked = _ollama_checked.get(base)
+    if checked is None or now - checked[0] >= OLLAMA_CHECK_EVERY:
+        names: set[str] = set()
+        headers = (
+            {"Authorization": f"Bearer {settings.ollama_api_key}"}
+            if settings.ollama_api_key
+            else {}
+        )
+        try:
+            async with httpx.AsyncClient(timeout=3, follow_redirects=False) as client:
+                response = await client.get(f"{base}/api/tags", headers=headers)
+            if response.status_code == 200:
+                for item in response.json().get("models") or []:
+                    names.update(str(item.get(k, "")) for k in ("name", "model"))
+        except (httpx.HTTPError, ValueError):
+            pass
+        checked = (now, names)
+        _ollama_checked[base] = checked
+    return bool(_ollama_names(model) & checked[1])
 
 
 def configured(provider: str) -> bool:

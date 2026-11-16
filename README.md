@@ -26,7 +26,10 @@ disc levels (L1/L2 to L5/S1) as **Normal/Mild**, **Moderate** or **Severe**:
 - **Assistant** (Chainlit-style): conversation history with search, rename and delete; edit any
   earlier message and resend; regenerate; stop; image and DICOM attachments; English or Urdu.
   **Automatic LLM fallback**: Groq → Gemini → Ollama (configurable). A rate limit, timeout or
-  error switches to the next model without any setting change, and failing models cool down.
+  error switches to the next model without any setting change; a model that sends nothing for
+  90 s (`LLM_TIMEOUT_SECONDS`) is replaced by the next one; failing models cool down
+  (a missing Ollama model only for a minute, and it is re-checked as soon as it is pulled;
+  `curl -X DELETE http://localhost:8000/api/chat/providers/cooldowns` clears all cooldowns).
   Reasoning models show their thinking in a collapsible panel. Attach a DICOM file or series
   ZIP and the SpineScope models analyse it inside the chat (animated progress, result images);
   ask for a level ("show the L4/L5 box") and its slice, focus map and crop are shown. Answers

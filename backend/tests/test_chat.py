@@ -414,3 +414,144 @@ def test_stop_ends_the_run_and_keeps_the_partial_answer(monkeypatch):
     assert thread["running"] is False
     assert thread["messages"][-1]["status"] == "stopped"
     assert thread["messages"][-1]["content"].startswith("first")
+
+
+def test_ollama_missing_model_cools_down_briefly(chain):
+    from app.services.chat.router import cooldowns
+
+    ollama, groq = Candidate("ollama", "qwen3-vl:8b-thinking"), Candidate("groq", "m")
+    cooldowns.penalize(ollama, ProviderFailure("not_found", "404"))
+    cooldowns.penalize(groq, ProviderFailure("not_found", "404"))
+    assert 50 < cooldowns.blocked(ollama) <= 60
+    assert cooldowns.blocked(groq) > 3000
+    cooldowns.penalize(ollama, ProviderFailure("auth", "403"))
+    assert cooldowns.reason(ollama) in {"auth", "not_found"} and cooldowns.blocked(ollama) <= 60
+
+
+def test_cooling_ollama_is_retried_once_the_model_is_back(monkeypatch):
+    from app.services.chat.router import cooldowns
+
+    calls = []
+
+    async def ollama(model, system, history, image):
+        calls.append(model)
+        yield "from ollama"
+
+    async def has_model(model):
+        return True
+
+    monkeypatch.setattr(providers, "ADAPTERS", {"ollama": ollama})
+    monkeypatch.setattr(providers, "candidates", lambda vision=False: [Candidate("ollama", "q")])
+    monkeypatch.setattr(providers, "ollama_has_model", has_model)
+    cooldowns.penalize(Candidate("ollama", "q"), ProviderFailure("not_found", "404"))
+    events = collect(route("s", [{"role": "user", "content": "q"}], None))
+    assert calls == ["q"]
+    assert not any(e.type == "step" and e.step.status == "skipped" for e in events)
+    assert cooldowns.blocked(Candidate("ollama", "q")) == 0
+
+
+def test_cooling_ollama_stays_skipped_while_the_model_is_missing(monkeypatch):
+    from app.services.chat.router import cooldowns
+
+    async def has_model(model):
+        return False
+
+    monkeypatch.setattr(providers, "ollama_has_model", has_model)
+    monkeypatch.setattr(
+        providers,
+        "candidates",
+        lambda vision=False: [Candidate("ollama", "q"), Candidate("groq", "m")],
+    )
+
+    async def groq(model, system, history, image):
+        yield "from groq"
+
+    monkeypatch.setattr(providers, "ADAPTERS", {"groq": groq, "ollama": groq})
+    cooldowns.penalize(Candidate("ollama", "q"), ProviderFailure("not_found", "404"))
+    events = collect(route("s", [{"role": "user", "content": "q"}], None))
+    skipped = [e.step for e in events if e.type == "step" and e.step.status == "skipped"]
+    assert [s.provider for s in skipped] == ["ollama"]
+    assert events[-1].candidate.provider == "groq"
+
+
+def test_ollama_tags_check(monkeypatch):
+    import httpx
+
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama.test")
+    get_settings.cache_clear()
+    hits = []
+
+    def handler(request):
+        hits.append(request.url.path)
+        return httpx.Response(
+            200, json={"models": [{"name": "qwen3-vl:8b-thinking"}, {"name": "gemma3:latest"}]}
+        )
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw)
+    )
+    assert asyncio.run(providers.ollama_has_model("qwen3-vl:8b-thinking"))
+    assert asyncio.run(providers.ollama_has_model("gemma3"))  # "gemma3" means gemma3:latest
+    assert not asyncio.run(providers.ollama_has_model("llama3"))
+    assert hits == ["/api/tags"]  # cached for a few seconds
+    get_settings.cache_clear()
+
+
+def test_cooldowns_can_be_cleared_without_a_restart():
+    from app.services.chat.router import cooldowns
+
+    cooldowns.penalize(Candidate("groq", "m"), ProviderFailure("not_found", "404"))
+    with TestClient(create_app()) as client:
+        assert client.get("/api/chat/providers").json()["cooldowns"]
+        assert client.delete("/api/chat/providers/cooldowns").json() == {"cooldowns": {}}
+
+
+def _timeout_chain(monkeypatch, first):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "1")
+    get_settings.cache_clear()
+
+    async def groq(model, system, history, image):
+        yield "from groq"
+
+    monkeypatch.setattr(providers, "ADAPTERS", {"ollama": first, "groq": groq})
+    monkeypatch.setattr(
+        providers,
+        "candidates",
+        lambda vision=False: [Candidate("ollama", "slow"), Candidate("groq", "m")],
+    )
+
+
+def test_a_model_that_does_not_answer_in_time_is_replaced(monkeypatch):
+    import time
+
+    async def silent(model, system, history, image):
+        await asyncio.sleep(30)
+        yield "too late"
+
+    _timeout_chain(monkeypatch, silent)
+    started = time.monotonic()
+    events = collect(route("s", [{"role": "user", "content": "q"}], None))
+    failed = [e.step for e in events if e.type == "step" and e.step.status == "failed"]
+    assert time.monotonic() - started < 5
+    assert failed[0].provider == "ollama" and failed[0].detail == "no response in 1 s"
+    assert events[-1].type == "done" and events[-1].candidate.provider == "groq"
+    assert "".join(e.text for e in events if e.type == "delta") == "from groq"
+
+
+def test_a_model_that_stalls_mid_answer_is_replaced(monkeypatch):
+    async def stalls(model, system, history, image):
+        yield "partial "
+        await asyncio.sleep(30)
+        yield "never"
+
+    _timeout_chain(monkeypatch, stalls)
+    events = collect(route("s", [{"role": "user", "content": "q"}], None))
+    types = [e.type for e in events]
+    assert "reset" in types and events[-1].candidate.provider == "groq"
+    text = "".join(e.text for e in events[types.index("reset") :] if e.type == "delta")
+    assert text == "from groq"
