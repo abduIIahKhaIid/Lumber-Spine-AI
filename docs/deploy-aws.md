@@ -203,7 +203,8 @@ name `LumberSpine-GitHub-Deploy` -> Create role. Then:
   `<ACCOUNT_ID>` replaced -> Update. (It allows only the `production` environment of this
   repository.) This repository was created after GitHub switched new repositories to
   immutable OIDC subjects. Its subject includes the public owner ID `91344658` and repository
-  ID `1459133201`; do not remove those IDs from the policy.
+  ID `1459133201`; do not remove those IDs from the policy. The policy also accepts the
+  older name-only subject, so it keeps working whichever form GitHub sends.
 * Add permissions -> Create inline policy -> JSON -> paste
   [`deploy/iam/github-deploy-policy.json`](../deploy/iam/github-deploy-policy.json) with
   `<REGION>`, `<ACCOUNT_ID>`, `<INSTANCE_ID>` replaced -> name `lumber-spine-ai-deploy`.
