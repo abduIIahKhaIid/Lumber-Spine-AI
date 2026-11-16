@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import clsx from "clsx";
 import {
   AlertCircle,
@@ -18,16 +18,31 @@ import type { ChatMessage, ImageElement, ScanAttachment, ToolCall } from "./type
 const seconds = (value?: number | null) =>
   value == null ? "" : value < 10 ? `${value.toFixed(1)} s` : `${Math.round(value)} s`;
 
-/** DeepSeek-style reasoning disclosure. Rendered only when the model sent its thinking. */
+/**
+ * DeepSeek-style reasoning disclosure. Rendered only when the model sent its thinking.
+ * While the model thinks, the panel follows the newest text; scrolling up to read stops that,
+ * and scrolling back to the end resumes it.
+ */
 export function Thinking({ message }: { message: ChatMessage }) {
   const live = message.status === "streaming" && message.reasoning_seconds == null;
   const [open, setOpen] = useState(message.status === "streaming");
+  const box = useRef<HTMLDivElement>(null);
+  const follow = useRef(true);
+
+  useEffect(() => {
+    const element = box.current;
+    if (element && open && follow.current) element.scrollTop = element.scrollHeight;
+  }, [message.reasoning, open]);
+
   if (!message.reasoning) return null;
   return (
     <div className="mb-3">
       <button
         type="button"
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          follow.current = true;
+          setOpen(!open);
+        }}
         aria-expanded={open}
         className="inline-flex items-center gap-1.5 rounded-lg bg-bone px-2.5 py-1 text-sm text-graphite hover:text-ink"
       >
@@ -43,7 +58,16 @@ export function Thinking({ message }: { message: ChatMessage }) {
       </button>
       {open && (
         <div
-          className="mt-2 max-h-80 overflow-y-auto whitespace-pre-wrap border-l-2 border-rule pl-3 text-sm leading-relaxed text-graphite"
+          ref={box}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+          }}
+          className={clsx(
+            "mt-2 max-h-80 overflow-y-auto whitespace-pre-wrap border-l-2 border-rule pl-3 text-sm leading-relaxed text-graphite",
+            // While thinking, older lines fade out at the top as the text moves up.
+            live && "[mask-image:linear-gradient(to_bottom,transparent,black_2.5rem)]",
+          )}
           dir="auto"
         >
           {message.reasoning.trim()}
