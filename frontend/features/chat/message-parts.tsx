@@ -20,8 +20,8 @@ const seconds = (value?: number | null) =>
 
 /**
  * DeepSeek-style reasoning disclosure. Rendered only when the model sent its thinking.
- * While the model thinks, the panel follows the newest text; scrolling up to read stops that,
- * and scrolling back to the end resumes it.
+ * While the model thinks, the panel is open and follows the newest text (scrolling up to read
+ * stops that, scrolling back to the end resumes it). When the answer starts, it closes itself.
  */
 export function Thinking({ message }: { message: ChatMessage }) {
   const live = message.status === "streaming" && message.reasoning_seconds == null;
@@ -33,6 +33,13 @@ export function Thinking({ message }: { message: ChatMessage }) {
     const element = box.current;
     if (element && open && follow.current) element.scrollTop = element.scrollHeight;
   }, [message.reasoning, open]);
+
+  // When the thinking ends and the answer starts, fold the panel away (it can be reopened).
+  const wasLive = useRef(live);
+  useEffect(() => {
+    if (wasLive.current && !live) setOpen(false);
+    wasLive.current = live;
+  }, [live]);
 
   if (!message.reasoning) return null;
   return (
