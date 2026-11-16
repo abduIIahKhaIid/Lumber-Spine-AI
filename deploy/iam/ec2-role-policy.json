@@ -1,0 +1,24 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadProductionSettings",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameter",
+      "Resource": "arn:aws:ssm:<REGION>:<ACCOUNT_ID>:parameter/lumber-spine-ai/prod/dotenv"
+    },
+    {
+      "Sid": "ListModelFolder",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::<MODELS_BUCKET>",
+      "Condition": { "StringLike": { "s3:prefix": ["lumber-spine-ai/model/*", "lumber-spine-ai/model"] } }
+    },
+    {
+      "Sid": "ReadModels",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::<MODELS_BUCKET>/lumber-spine-ai/model/*"
+    }
+  ]
+}

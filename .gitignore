@@ -13,6 +13,9 @@ build/
 **/*.tsbuildinfo
 
 # Secrets and local configuration
+deploy/runtime.env
+deploy/.runtime.env.*
+deploy/.deployed_sha
 **/.env
 **/.env.local
 **/.env.*.local

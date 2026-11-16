@@ -60,9 +60,11 @@ frontend/               Next.js 15 + React 19 + Tailwind CSS 4
   app/                  routes
   features/scans|chat|cases|home   feature modules
   components/ lib/      shared shell and utilities
-docs/                   architecture and operations notes
-.github/workflows/ci.yml  one pipeline: lint, tests, build, Docker smoke test, security, GHCR publish
-docker-compose.yml      redis + api + worker + web
+docs/                   architecture, operations and AWS deploy guide
+deploy/                 production: Caddyfile, deploy script with rollback, EC2 user data, IAM
+.github/workflows/ci.yml  one pipeline: lint, tests, build, Docker smoke test, security, publish, deploy
+docker-compose.yml      redis + api + worker + web (local)
+docker-compose.prod.yml the same behind Caddy (HTTPS) on AWS EC2
 ```
 
 ## Quick start
@@ -138,8 +140,10 @@ cd frontend && npm run check      # prettier, TypeScript, unit tests, production
 A single GitHub Actions workflow (`.github/workflows/ci.yml`) runs these, a Docker build and
 smoke test of the whole stack, and the security scans: CodeQL, gitleaks, Bandit, pip-audit,
 npm audit, Trivy and dependency review. On `main`, images are published to GitHub Container
-Registry only when everything passed. Security scans also re-run weekly. Dependabot opens pull
-requests only for security fixes.
+Registry only when everything passed, and then deployed to AWS EC2 through SSM, with an
+automatic rollback if the new version fails its checks. Setup, free HTTPS domain and costs:
+[docs/deploy-aws.md](docs/deploy-aws.md). Security scans also re-run weekly. Dependabot opens
+pull requests only for security fixes.
 
 ## Validation status
 

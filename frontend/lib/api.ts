@@ -1,4 +1,7 @@
-/** Backend origin. Set NEXT_PUBLIC_API_ORIGIN at build time when the API is elsewhere. */
+/**
+ * Backend origin, fixed at build time. "/" means the same origin (production: Caddy sends /api
+ * to the API); the default is the local API.
+ */
 export const apiOrigin = (process.env.NEXT_PUBLIC_API_ORIGIN || "http://localhost:8000").replace(
   /\/$/,
   "",

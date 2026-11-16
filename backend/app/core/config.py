@@ -57,6 +57,8 @@ class Settings:
     app_name: str = "Lumber Spine AI"
     version: str = "3.0.0"
     environment: str = field(default_factory=lambda: os.getenv("APP_ENV", "development"))
+    # Git commit of the running images, set by the deploy; /health reports it.
+    commit: str = field(default_factory=lambda: os.getenv("APP_COMMIT", "").strip()[:40])
 
     model_dir: Path = field(default_factory=lambda: _path("MODEL_DIR", BACKEND_DIR / "model"))
     data_dir: Path = field(default_factory=lambda: _path("DATA_DIR", BACKEND_DIR / "data"))

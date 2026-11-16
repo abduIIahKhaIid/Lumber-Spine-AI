@@ -1,0 +1,32 @@
+# HTTPS front door. Caddy gets and renews a free Let's Encrypt certificate for PUBLIC_HOST.
+# PUBLIC_HOST is either your own domain (spine.example.com, DNS A record -> the Elastic IP) or,
+# without a domain, <elastic-ip-with-dashes>.sslip.io (e.g. 13-236-244-226.sslip.io).
+
+{$PUBLIC_HOST} {
+	encode zstd gzip
+
+	# Scan uploads are limited to MAX_UPLOAD_MB (120) by the API; allow a little more here.
+	request_body {
+		max_size 130MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	@api path /api/* /docs /docs/* /redoc /openapi.json /health /ready
+	handle @api {
+		reverse_proxy api:8000 {
+			# Chat answers stream as server-sent events: pass every chunk on at once.
+			flush_interval -1
+			transport http {
+				read_timeout 15m
+			}
+		}
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}

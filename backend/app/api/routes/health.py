@@ -15,7 +15,12 @@ router = APIRouter(tags=["health"])
 @router.get("/health")
 def health():
     settings = get_settings()
-    return {"status": "ok", "app": settings.app_name, "version": settings.version}
+    return {
+        "status": "ok",
+        "app": settings.app_name,
+        "version": settings.version,
+        "commit": settings.commit or None,
+    }
 
 
 @router.get("/ready")

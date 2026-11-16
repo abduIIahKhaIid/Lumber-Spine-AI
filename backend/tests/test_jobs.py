@@ -171,3 +171,13 @@ def test_progress_reports_live_step_timing():
     assert seen[-1]["stage"] == "Grade each level"
     doc = with_live_timing({"state": "running"}, seen[-1])
     assert doc["timing"]["stage_elapsed"] >= 0
+
+
+def test_health_reports_the_deployed_commit(monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("APP_COMMIT", "abc123")
+    get_settings.cache_clear()
+    with TestClient(create_app()) as client:
+        assert client.get("/health").json()["commit"] == "abc123"
+    get_settings.cache_clear()

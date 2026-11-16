@@ -1,7 +1,12 @@
 name: CI
 
-# One workflow for everything: lint, tests, build, Docker smoke test, security scans and,
-# on main, publishing images to GitHub Container Registry for a future AWS or Render deploy.
+# One workflow for everything: lint, tests, build, Docker smoke tests, security scans and, on
+# main, publishing and deploying:
+#   every check green -> images to the GitHub Container Registry (tag = commit, public, free)
+#                     -> AWS SSM runs deploy/remote_deploy.sh on the EC2 server
+#                     -> https://PUBLIC_HOST/health must report the pushed commit
+# AWS access uses GitHub OIDC (no AWS keys in GitHub). Until the repository variables of
+# docs/deploy-aws.md exist, the deploy is skipped with a notice and the run stays green.
 # The weekly schedule re-runs the security scans so new advisories surface on their own.
 
 on:
@@ -17,7 +22,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Pull requests: a new push cancels the old run. main: runs queue, so a deploy is never cut off.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   backend-lint:
@@ -123,8 +129,8 @@ jobs:
           docker compose up -d --no-build
       - name: Smoke test (health, readiness with a live Celery worker, web)
         run: |
-          for i in $(seq 1 60); do curl -fs http://localhost:8000/health && break; sleep 2; done
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do curl -fs http://localhost:8000/health && break; sleep 2; done
+          for _ in $(seq 1 60); do
             if curl -fs http://localhost:8000/ready | tee ready.json | grep -q '"ready":true'; then break; fi
             sleep 3
           done
@@ -140,9 +146,69 @@ jobs:
       - run: docker compose down -v
         if: always()
 
+      # Production rehearsal: the real deploy script and docker-compose.prod.yml behind Caddy,
+      # with a stand-in AWS CLI (Parameter Store and S3 are fakes; the images are local).
+      - name: Build the production web image (API on the same origin)
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          load: true
+          build-args: NEXT_PUBLIC_API_ORIGIN=/
+          tags: ghcr.io/abduiiahkhaiid/lumber-spine-ai-web-prod:${{ github.sha }}
+          cache-from: type=gha,scope=web-prod
+          cache-to: type=gha,mode=max,scope=web-prod
+      - name: Deploy script rehearsal (deploy, then a broken release that must roll back)
+        env:
+          PREFIX: ghcr.io/abduiiahkhaiid/lumber-spine-ai
+          AWS_REGION: ap-southeast-2
+        run: |
+          set -euo pipefail
+          shellcheck deploy/*.sh
+          docker run --rm -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" -e PUBLIC_HOST=localhost \
+            caddy:2.10-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          docker tag "$PREFIX-api:latest" "$PREFIX-api:$GITHUB_SHA"
+          docker tag "$PREFIX-worker:latest" "$PREFIX-worker:$GITHUB_SHA"
+          mkdir -p fakebin
+          cat > fakebin/aws <<'FAKE'
+          #!/bin/bash
+          case "$1 $2" in
+            "ssm get-parameter")
+              printf 'PUBLIC_HOST=localhost\r\nREVIEW_ACCESS_TOKEN=ci-token\r\n'
+              printf 'GROQ_API_KEY=ci-not-a-key\nMODELS_S3_URI=s3://example/lumber-spine-ai/model\n' ;;
+            "s3 sync") exit 0 ;;
+            *) echo "unexpected aws call: $*" >&2; exit 1 ;;
+          esac
+          FAKE
+          chmod +x fakebin/aws
+          export PATH="$PWD/fakebin:$PATH"
+          bash deploy/remote_deploy.sh "$GITHUB_SHA"
+          if grep -q $'\r' deploy/runtime.env; then echo "CR left in runtime.env"; exit 1; fi
+          curl -fsk https://localhost/health | tee health.json
+          grep -q "\"commit\":\"$GITHUB_SHA\"" health.json
+          curl -fsk https://localhost/ready > /dev/null
+          curl -fsk https://localhost/ | grep -qi "<html"
+          curl -fsk -X POST https://localhost/api/chat/threads -H 'Content-Type: application/json' -d '{}'
+          # A release whose API cannot start (the web image has no uvicorn) must roll back.
+          docker tag "$PREFIX-web-prod:$GITHUB_SHA" "$PREFIX-api:broken"
+          docker tag "$PREFIX-worker:$GITHUB_SHA" "$PREFIX-worker:broken"
+          docker tag "$PREFIX-web-prod:$GITHUB_SHA" "$PREFIX-web-prod:broken"
+          set +e
+          READY_ATTEMPTS=12 bash deploy/remote_deploy.sh broken
+          code=$?
+          set -e
+          echo "broken release exited with $code"
+          test "$code" -eq 1
+          grep -qx "$GITHUB_SHA" deploy/.deployed_sha
+          curl -fsk https://localhost/health | grep -q "\"commit\":\"$GITHUB_SHA\""
+      - name: Production logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.prod.yml --env-file deploy/runtime.env logs --no-color --tail=150 || true
+      - run: docker compose -f docker-compose.prod.yml --env-file deploy/runtime.env down -v || true
+        if: always()
+
   publish:
     name: Publish images to GHCR
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     # Images are published only when the build, tests and every security scan passed.
     needs: [backend-tests, docker, codeql, secrets, python-security, node-security, trivy]
     runs-on: ubuntu-latest
@@ -152,9 +218,11 @@ jobs:
     strategy:
       matrix:
         include:
-          - { name: api, context: backend, target: api }
-          - { name: worker, context: backend, target: worker }
-          - { name: web, context: frontend, target: "" }
+          - { name: api, context: backend, target: api, args: "" }
+          - { name: worker, context: backend, target: worker, args: "" }
+          - { name: web, context: frontend, target: "", args: "" }
+          # Production web: calls the API on its own domain (/api behind Caddy)
+          - { name: web-prod, context: frontend, target: "", args: "NEXT_PUBLIC_API_ORIGIN=/" }
     steps:
       - uses: actions/checkout@v4
       - name: Image name (GHCR needs lowercase)
@@ -170,6 +238,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           target: ${{ matrix.target }}
+          build-args: ${{ matrix.args }}
           push: true
           tags: |
             ${{ steps.image.outputs.name }}:${{ github.sha }}
@@ -178,6 +247,90 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.name }}
+
+  deploy:
+    name: Deploy to AWS EC2
+    # After the images of this commit are published; skipped (green) until AWS is configured.
+    needs: [publish]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment:
+      name: production
+      url: ${{ vars.PUBLIC_HOST && format('https://{0}', vars.PUBLIC_HOST) || '' }}
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write # GitHub OIDC -> AWS role; no AWS keys are stored in GitHub
+    env:
+      ROLE: ${{ vars.AWS_ROLE_ARN }}
+      REGION: ${{ vars.AWS_REGION }}
+      INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+      PUBLIC_HOST: ${{ vars.PUBLIC_HOST }}
+    steps:
+      - name: AWS configured?
+        id: config
+        run: |
+          missing=""
+          [ -n "$ROLE" ] || missing="$missing AWS_ROLE_ARN"
+          [ -n "$REGION" ] || missing="$missing AWS_REGION"
+          [ -n "$INSTANCE_ID" ] || missing="$missing EC2_INSTANCE_ID"
+          [ -n "$PUBLIC_HOST" ] || missing="$missing PUBLIC_HOST"
+          if [ -n "$missing" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Deploy skipped: repository variables missing:$missing (docs/deploy-aws.md)"
+            echo "### Deploy skipped: missing repository variables:$missing" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.config.outputs.ready == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Run deploy/remote_deploy.sh on the server (AWS SSM)
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          SCRIPT="set -e; cd /home/ubuntu/lumber-spine-ai; sudo -u ubuntu git fetch --quiet origin; sudo -u ubuntu git reset --hard --quiet ${GITHUB_SHA}; bash deploy/remote_deploy.sh ${GITHUB_SHA}"
+          PARAMS="$(jq -cn --arg c "$SCRIPT" '{commands: [$c], executionTimeout: ["1500"]}')"
+          CMD_ID="$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name AWS-RunShellScript \
+            --comment "deploy ${GITHUB_SHA::7}" --parameters "$PARAMS" --timeout-seconds 600 \
+            --query Command.CommandId --output text)"
+          echo "SSM command: $CMD_ID"
+          STATUS=Pending
+          for _ in $(seq 1 170); do
+            sleep 10
+            STATUS="$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+              --query Status --output text 2>/dev/null || echo Pending)"
+            case "$STATUS" in Pending|InProgress|Delayed) ;; *) break ;; esac
+          done
+          echo "::group::Server output"
+          aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+            --query StandardOutputContent --output text || true
+          aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+            --query StandardErrorContent --output text || true
+          echo "::endgroup::"
+          echo "Status: $STATUS"
+          if [ "$STATUS" != "Success" ]; then
+            echo "::error::Deploy failed ($STATUS). If the output says ROLLED_BACK, the previous version is still serving."
+            exit 1
+          fi
+      - name: Check the live site from outside
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -fsS --max-time 10 "https://${PUBLIC_HOST}/health" | tee health.json | grep -q "\"commit\":\"${GITHUB_SHA}\""; then
+              echo "### Deployed ${GITHUB_SHA::7} to https://${PUBLIC_HOST}" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::https://${PUBLIC_HOST}/health does not report ${GITHUB_SHA}"
+          cat health.json || true
+          exit 1
 
   # ---------------- Security ----------------
 

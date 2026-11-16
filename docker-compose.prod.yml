@@ -1,0 +1,92 @@
+# Lumber Spine AI - production on one AWS EC2 instance.
+#
+# Not for local use (that is docker-compose.yml). The deploy (deploy/remote_deploy.sh, run by
+# GitHub Actions through AWS SSM) writes deploy/runtime.env and then runs:
+#
+#   docker compose -f docker-compose.prod.yml --env-file deploy/runtime.env up -d
+#
+# deploy/runtime.env holds the settings from AWS SSM Parameter Store (/lumber-spine-ai/prod/dotenv)
+# plus IMAGE_TAG (the git commit), which the deploy sets. The images are the public GitHub
+# Container Registry images that CI publishes for that commit (free, no registry login).
+#
+# Traffic: internet -> Caddy :80/:443 (HTTPS for PUBLIC_HOST) -> /api, /docs -> api:8000
+#                                                              -> everything else -> web:3000
+# The API and web ports are bound to 127.0.0.1 only, for the deploy's health checks.
+
+name: lumber-spine-ai
+
+x-backend: &backend
+  env_file: [deploy/runtime.env]
+  volumes:
+    - app-data:/app/data
+    - ./backend/model:/app/model:ro # synced from S3 by the deploy (or copied there once)
+  depends_on:
+    redis: { condition: service_healthy }
+  restart: always
+  logging: &logging
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+x-backend-env: &backend-env
+  APP_ENV: production
+  APP_COMMIT: ${IMAGE_TAG:?set by deploy/remote_deploy.sh}
+  REDIS_URL: redis://redis:6379/0
+  JOB_BACKEND: celery
+  DATA_DIR: /app/data
+  MODEL_DIR: /app/model
+  FRONTEND_ORIGINS: https://${PUBLIC_HOST:?PUBLIC_HOST missing in the secret}
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: always
+    logging: *logging
+
+  api:
+    <<: *backend
+    image: ${IMAGE_PREFIX:-ghcr.io/abduiiahkhaiid/lumber-spine-ai}-api:${IMAGE_TAG}
+    environment:
+      <<: *backend-env
+      # Caddy is the only client: trust its X-Forwarded-For so rate limits are per real user.
+      FORWARDED_ALLOW_IPS: "*"
+    ports: ["127.0.0.1:8000:8000"]
+
+  worker:
+    <<: *backend
+    image: ${IMAGE_PREFIX:-ghcr.io/abduiiahkhaiid/lumber-spine-ai}-worker:${IMAGE_TAG}
+    environment:
+      <<: *backend-env
+      WORKER_PRELOAD_MODELS: "1"
+
+  web:
+    # Built in CI with NEXT_PUBLIC_API_ORIGIN=/ so the browser calls /api on the same domain.
+    image: ${IMAGE_PREFIX:-ghcr.io/abduiiahkhaiid/lumber-spine-ai}-web-prod:${IMAGE_TAG}
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on:
+      api: { condition: service_healthy }
+    restart: always
+    logging: *logging
+
+  caddy:
+    image: caddy:2.10-alpine
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data # certificates: keep, or Let's Encrypt rate limits apply
+      - caddy-config:/config
+    depends_on: [api, web]
+    restart: always
+    logging: *logging
+
+volumes:
+  app-data: # saved cases, conversations and in-flight uploads (back it up with EBS snapshots)
+  caddy-data:
+  caddy-config:
