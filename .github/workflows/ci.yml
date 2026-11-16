@@ -131,6 +131,9 @@ jobs:
           cat ready.json; grep -q '"backend":"celery"' ready.json
           curl -fs http://localhost:3000/ > /dev/null
           curl -fs -X POST http://localhost:8000/api/chat/threads -H 'Content-Type: application/json' -d '{}'
+      - name: Worker image has the full ML stack
+        run: |
+          docker compose exec -T worker python -c "import torch, torchvision, timm, ultralytics, cv2, monai, pydicom; from app.ml.pipelines import series, single; from app.ml.architectures.stage2 import EfficientNetV2SCS; EfficientNetV2SCS(); print('torch', torch.__version__, 'ultralytics', ultralytics.__version__)"
       - name: Logs on failure
         if: failure()
         run: docker compose logs --no-color --tail=200
