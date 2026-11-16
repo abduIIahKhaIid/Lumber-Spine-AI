@@ -211,6 +211,16 @@ name `LumberSpine-GitHub-Deploy` -> Create role. Then:
   (It can only run commands on this one instance.)
 * Copy the role **ARN**.
 
+**If OIDC is not available in your account** (some Free-plan accounts cannot create the
+identity provider), use an IAM user with the same narrow permission instead:
+IAM -> Users -> Create user `lumber-spine-ai-deploy` (no console access) -> Attach policies
+directly -> skip -> Create user. Open it -> Add permissions -> Create inline policy -> JSON ->
+paste `deploy/iam/github-deploy-policy.json` (placeholders replaced) -> name
+`lumber-spine-ai-deploy`. Then Security credentials -> **Create access key** -> *Application
+running outside AWS* -> copy both values. In GitHub add them as repository **secrets**
+`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` and leave out the `AWS_ROLE_ARN` variable.
+The keys can only start the deploy on this one instance. Rotate them if they ever leak.
+
 **GitHub:** repository -> Settings -> **Environments** -> New environment `production` ->
 Configure (no reviewers: deploys are automatic). Restrict deployment branches to `main`.
 Then Settings -> **Secrets and variables ->
@@ -218,12 +228,12 @@ Actions -> Variables** tab -> New repository variable, four times:
 
 | Name | Value |
 |---|---|
-| `AWS_ROLE_ARN` | `arn:aws:iam::<ACCOUNT_ID>:role/LumberSpine-GitHub-Deploy` |
+| `AWS_ROLE_ARN` | `arn:aws:iam::<ACCOUNT_ID>:role/LumberSpine-GitHub-Deploy` (not with the IAM user keys) |
 | `AWS_REGION` | `ap-southeast-2` |
 | `EC2_INSTANCE_ID` | `<INSTANCE_ID>` |
 | `PUBLIC_HOST` | `<PUBLIC_HOST>` |
 
-No GitHub secrets are needed.
+With OIDC no GitHub secrets are needed.
 
 ## 10. First deploy, and every deploy after it
 
