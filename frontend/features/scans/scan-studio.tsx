@@ -486,6 +486,13 @@ function Results({
             mode: result.mode,
             // Focus maps stay in the browser; the model only receives structured findings.
             findings: findings.map(({ explanation: _drop, ...rest }) => rest),
+            // Sizes only (for box coordinates); the pixels are sent separately as assets.
+            images: result.images.map(({ index, slice_number, width, height }) => ({
+              index,
+              slice_number,
+              width,
+              height,
+            })),
             quality: result.quality,
             recommendations: result.recommendations,
           },

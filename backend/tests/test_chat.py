@@ -133,7 +133,8 @@ def test_case_context_is_sanitised(chain, sample_result):
         ).json()
         stored = client.get(f"/api/chat/threads/{thread['id']}").json()["case_context"]
         assert "patient" not in stored and stored["findings"][1]["id"] == "F2"
-        assert "images" not in stored
+        # Image sizes are kept for coordinates; pixels never are.
+        assert all(set(i) == {"index", "slice", "width", "height"} for i in stored["images"])
 
 
 def test_empty_message_rejected_and_no_provider_configured():
@@ -335,6 +336,20 @@ def test_level_mentions_are_parsed():
     assert mentioned("show the left L4/L5 box") == ({"L4/L5"}, "left")
     assert mentioned("L5-S1 aur L3 L4") == ({"L5/S1", "L3/L4"}, None)
     assert wants_images("L4/L5 ki tasveer dikhao") and not wants_images("what is stenosis?")
+    assert wants_images("show me the box of the worst level")
+    assert not wants_images("tell me the coordinate of the spinal level of the previous image")
+
+
+def test_coordinates_reach_the_model(sample_result):
+    from app.services.chat.context import clean_case, system_prompt
+
+    sample_result["images"] = [{"index": 0, "slice_number": 9, "width": 384, "height": 384}]
+    case = clean_case(sample_result)
+    finding = case["findings"][0]
+    assert finding["box"] == [10, 10, 40, 40] and finding["center"] == [25, 25]
+    assert case["images"] == [{"index": 0, "slice": 9, "width": 384, "height": 384}]
+    prompt = system_prompt("english", case)
+    assert '"box":[10,10,40,40]' in prompt and "pixel coordinates" in prompt
 
 
 def slow_adapter(words, delay=0.05):

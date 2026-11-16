@@ -28,9 +28,16 @@ SEVERITY_RANK = {"Normal/Mild": 0, "Moderate": 1, "Severe": 2}
 LEVEL = re.compile(r"\b(?:([lr])\s+)?l\s*([1-5])\s*[/\-–_ ]?\s*(l\s*[1-5]|s\s*1)\b", re.I)
 LEFT = re.compile(r"\b(left|baen|baayen|bayen|bain|bayan)\b", re.I)
 RIGHT = re.compile(r"\b(right|dayen|daen|daayen|dain|dayan)\b", re.I)
-VISUAL = re.compile(
-    r"\b(box(es)?|image|images|picture|pic|photo|show|display|view|see|slice|focus|heat\s?map"
-    r"|crop|highlight|overlay|where|marked|dikh\w*|dekh\w*|tasve?e?r|tasvir|screenshot)\b",
+# Images are attached when the user asks to *see* something: a display word plus a thing to
+# see (a level, box, image, focus map...). "Tell me the coordinates of the previous image" asks
+# for numbers, not pictures, so it gets none.
+DISPLAY = re.compile(
+    r"\b(show|display|view|see|open|zoom|highlight|draw|mark|dikh\w*|dekh\w*|batao\s+kahan)\b",
+    re.I,
+)
+SUBJECT = re.compile(
+    r"\b(box(es)?|image|images|picture|pic|photo|slice|focus|heat\s?map|crop|overlay|level|"
+    r"levels|worst|severe|moderate|tasve?e?r|tasvir|screenshot)\b",
     re.I,
 )
 MAX_ASSETS = 60
@@ -97,7 +104,8 @@ def clean_assets(assets: list | None) -> list[dict]:
 
 
 def wants_images(text: str) -> bool:
-    return bool(VISUAL.search(text or ""))
+    text = text or ""
+    return bool(DISPLAY.search(text)) and bool(SUBJECT.search(text) or LEVEL.search(text))
 
 
 def mentioned(text: str) -> tuple[set[str], str | None]:

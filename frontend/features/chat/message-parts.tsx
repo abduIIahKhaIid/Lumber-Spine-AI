@@ -273,7 +273,7 @@ export function ImageElements({ images }: { images: ImageElement[] }) {
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={`data:image/jpeg;base64,${image.data}`}
-                alt={image.caption}
+                alt=""
                 className={clsx(
                   "w-full object-contain",
                   index === 0 ? "aspect-square sm:h-full sm:aspect-auto" : "aspect-[4/3]",
