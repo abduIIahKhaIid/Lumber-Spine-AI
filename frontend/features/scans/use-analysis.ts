@@ -2,13 +2,20 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api, apiUrl } from "@/lib/api";
-import type { AnalysisResult, JobStatus, ScanMode } from "./types";
+import type { AnalysisResult, ClientTimings, JobStatus, ScanMode } from "./types";
 
 type Phase =
   | { name: "idle" }
   | { name: "uploading"; progress: number }
-  | { name: "processing"; job: JobStatus }
-  | { name: "done"; jobId: string; result: AnalysisResult }
+  | {
+      name: "processing";
+      job: JobStatus;
+      /** performance.now() when this status arrived, to keep the step clock ticking. */
+      received: number;
+      upload_seconds: number | null;
+      queued_since: number;
+    }
+  | { name: "done"; jobId: string; result: AnalysisResult; timing: ClientTimings }
   | { name: "error"; message: string };
 
 const storageKey = (mode: ScanMode) => `spinescope.job.${mode}`;
@@ -44,8 +51,8 @@ export function useAnalysis(mode: ScanMode) {
   const run = useRef(0);
 
   const poll = useCallback(
-    async (jobId: string, token: number) => {
-      let delay = 600;
+    async (jobId: string, token: number, clock?: { start: number; uploaded: number }) => {
+      let delay = 500;
       while (run.current === token) {
         let job: JobStatus;
         try {
@@ -62,7 +69,18 @@ export function useAnalysis(mode: ScanMode) {
         }
         if (run.current !== token) return;
         if (job.state === "succeeded" && job.result) {
-          setPhase({ name: "done", jobId, result: job.result });
+          const now = performance.now();
+          setPhase({
+            name: "done",
+            jobId,
+            result: job.result,
+            timing: clock
+              ? {
+                  upload_seconds: (clock.uploaded - clock.start) / 1000,
+                  total_seconds: (now - clock.start) / 1000,
+                }
+              : { upload_seconds: null, total_seconds: null },
+          });
           return;
         }
         if (job.state === "failed") {
@@ -70,9 +88,18 @@ export function useAnalysis(mode: ScanMode) {
           setPhase({ name: "error", message: job.error || "Analysis failed." });
           return;
         }
-        setPhase({ name: "processing", job });
+        setPhase((current) => ({
+          name: "processing",
+          job,
+          received: performance.now(),
+          upload_seconds: clock ? (clock.uploaded - clock.start) / 1000 : null,
+          queued_since:
+            current.name === "processing"
+              ? current.queued_since
+              : (clock?.uploaded ?? performance.now()),
+        }));
         await new Promise((resolve) => setTimeout(resolve, delay));
-        delay = Math.min(1500, delay + 150);
+        delay = Math.min(1000, delay + 100);
       }
     },
     [mode],
@@ -85,6 +112,9 @@ export function useAnalysis(mode: ScanMode) {
     setPhase({
       name: "processing",
       job: { id: saved, state: "queued", progress: 0, message: "Restoring the last analysis" },
+      received: performance.now(),
+      upload_seconds: null,
+      queued_since: performance.now(),
     });
     void poll(saved, token).catch(() => setPhase({ name: "idle" }));
     return () => {
@@ -97,11 +127,12 @@ export function useAnalysis(mode: ScanMode) {
       const token = ++run.current;
       setPhase({ name: "uploading", progress: 0 });
       try {
+        const begin = performance.now();
         const { job_id } = await upload(mode, files, (progress) => {
           if (run.current === token) setPhase({ name: "uploading", progress });
         });
         sessionStorage.setItem(storageKey(mode), job_id);
-        await poll(job_id, token);
+        await poll(job_id, token, { start: begin, uploaded: performance.now() });
       } catch (error) {
         if (run.current === token) setPhase({ name: "error", message: (error as Error).message });
       }

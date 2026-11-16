@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Loader2, Paperclip, Square, X } from "lucide-react";
+import { ArrowUp, FileArchive, Loader2, Paperclip, Square, X } from "lucide-react";
 import { apiUrl } from "@/lib/api";
 
-type Attachment = { name: string; data: string };
+/** An image goes to a vision model; a DICOM file or series is analysed by the SpineScope models. */
+type Attachment = { name: string; data: string | null; scan: File[] | null };
+
+const SCAN = /\.(dcm|dicom|zip)$/i;
 
 function readAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -15,19 +18,34 @@ function readAsBase64(file: File): Promise<string> {
   });
 }
 
-async function toAttachment(file: File): Promise<Attachment> {
-  if (file.name.toLowerCase().endsWith(".dcm")) {
+async function dicomPreview(file: File): Promise<string | null> {
+  try {
     const form = new FormData();
     form.append("file", file);
     const response = await fetch(apiUrl("/api/convert-dicom"), { method: "POST", body: form });
-    if (!response.ok) throw new Error("That DICOM file could not be converted.");
-    const body = (await response.json()) as { jpegBase64: string };
-    return { name: file.name, data: body.jpegBase64 };
+    if (!response.ok) return null;
+    return ((await response.json()) as { jpegBase64: string }).jpegBase64;
+  } catch {
+    return null;
   }
+}
+
+async function toAttachment(files: File[]): Promise<Attachment> {
+  if (files.every((f) => SCAN.test(f.name))) {
+    const zips = files.filter((f) => f.name.toLowerCase().endsWith(".zip"));
+    if (zips.length > 1 || (zips.length === 1 && files.length > 1))
+      throw new Error("Attach one ZIP of a series, or the series' .dcm files.");
+    if (files.length === 2) throw new Error("A series needs at least 3 slices.");
+    const name = files.length === 1 ? files[0].name : `${files.length} DICOM slices`;
+    const data = zips.length ? null : await dicomPreview(files[Math.floor(files.length / 2)]);
+    return { name, data, scan: files };
+  }
+  if (files.length > 1) throw new Error("Attach one image at a time.");
+  const file = files[0];
   if (!/^image\/(png|jpe?g|webp)$/.test(file.type))
-    throw new Error("Attach a PNG, JPEG or DICOM image.");
+    throw new Error("Attach a PNG or JPEG image, or a DICOM file or series ZIP to analyse.");
   if (file.size > 10 * 1024 * 1024) throw new Error("Images must be smaller than 10 MB.");
-  return { name: file.name, data: await readAsBase64(file) };
+  return { name: file.name, data: await readAsBase64(file), scan: null };
 }
 
 export default function Composer({
@@ -38,7 +56,7 @@ export default function Composer({
   initial,
 }: {
   streaming: boolean;
-  onSend: (text: string, image: string | null) => void;
+  onSend: (text: string, image: string | null, scan: File[] | null) => void;
   onStop: () => void;
   placeholder: string;
   initial?: string;
@@ -66,7 +84,11 @@ export default function Composer({
 
   function submit() {
     if (streaming || preparing || (!text.trim() && !attachment)) return;
-    onSend(text.trim(), attachment?.data ?? null);
+    onSend(
+      text.trim(),
+      attachment?.scan ? null : (attachment?.data ?? null),
+      attachment?.scan ?? null,
+    );
     setText("");
     setAttachment(null);
   }
@@ -76,13 +98,26 @@ export default function Composer({
       <div className="rounded-2xl border border-rule bg-paper p-2 shadow-[0_1px_2px_rgba(20,33,46,0.06)] focus-within:border-[#9aa8b6]">
         {attachment && (
           <div className="mb-2 flex items-center gap-2 rounded-xl bg-bone p-2">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={`data:image/jpeg;base64,${attachment.data}`}
-              alt=""
-              className="h-12 w-12 rounded-lg object-cover"
-            />
-            <span className="min-w-0 flex-1 truncate text-sm">{attachment.name}</span>
+            {attachment.data ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={`data:image/jpeg;base64,${attachment.data}`}
+                alt=""
+                className="h-12 w-12 rounded-lg bg-film object-cover"
+              />
+            ) : (
+              <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-film text-white">
+                <FileArchive size={20} />
+              </span>
+            )}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm">{attachment.name}</span>
+              <span className="block text-xs text-graphite">
+                {attachment.scan
+                  ? "Will be analysed by the SpineScope models"
+                  : "Image for the assistant to read"}
+              </span>
+            </span>
             <button
               type="button"
               aria-label="Remove attachment"
@@ -116,8 +151,8 @@ export default function Composer({
           <button
             type="button"
             className="rounded-lg p-2 text-graphite hover:bg-bone hover:text-ink"
-            aria-label="Attach an image"
-            title="Attach a PNG, JPEG or DICOM image"
+            aria-label="Attach an image or scan"
+            title="Attach an image, or a DICOM file / series ZIP to analyse"
             onClick={() => picker.current?.click()}
             disabled={preparing}
           >
@@ -127,15 +162,16 @@ export default function Composer({
             ref={picker}
             type="file"
             className="sr-only"
-            accept="image/png,image/jpeg,image/webp,.dcm"
+            multiple
+            accept="image/png,image/jpeg,image/webp,.dcm,.dicom,.zip"
             onChange={async (e) => {
-              const file = e.target.files?.[0];
+              const files = Array.from(e.target.files ?? []);
               e.target.value = "";
-              if (!file) return;
+              if (!files.length) return;
               setError("");
               setPreparing(true);
               try {
-                setAttachment(await toAttachment(file));
+                setAttachment(await toAttachment(files));
               } catch (err) {
                 setError((err as Error).message);
               } finally {

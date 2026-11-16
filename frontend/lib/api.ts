@@ -56,12 +56,18 @@ export async function* sseEvents<T>(
 ): AsyncGenerator<T> {
   let response: Response;
   try {
-    response = await fetch(apiUrl(path), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-      body: JSON.stringify(body ?? {}),
-      signal,
-    });
+    // body === null follows an existing stream with GET.
+    response = await fetch(
+      apiUrl(path),
+      body === null
+        ? { headers: { Accept: "text/event-stream" }, signal }
+        : {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+            body: JSON.stringify(body ?? {}),
+            signal,
+          },
+    );
   } catch (error) {
     if ((error as Error).name === "AbortError") return;
     throw new ApiError("The assistant server is not reachable.", 0);

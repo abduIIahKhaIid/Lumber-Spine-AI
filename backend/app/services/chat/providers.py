@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import json
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
@@ -83,9 +84,51 @@ def _openai_messages(system: str, history: list[dict], image: str | None, provid
     return messages
 
 
+TEXT, REASONING = "text", "reasoning"
+REASONING_MODELS = re.compile(r"qwen3|qwq|deepseek|gpt-oss|r1\b|magistral|phi-?4-reason", re.I)
+
+
+class ThinkSplitter:
+    """Splits a streamed answer into reasoning and text around <think>...</think> tags.
+
+    Tags may arrive split across chunks, so a possible partial tag is held back.
+    """
+
+    OPEN, CLOSE = "<think>", "</think>"
+
+    def __init__(self) -> None:
+        self.buffer = ""
+        self.inside = False
+
+    def feed(self, chunk: str) -> list[tuple[str, str]]:
+        self.buffer += chunk
+        out: list[tuple[str, str]] = []
+        while self.buffer:
+            tag = self.CLOSE if self.inside else self.OPEN
+            index = self.buffer.find(tag)
+            if index >= 0:
+                if index:
+                    out.append((REASONING if self.inside else TEXT, self.buffer[:index]))
+                self.buffer = self.buffer[index + len(tag) :]
+                self.inside = not self.inside
+                continue
+            keep = next((n for n in range(len(tag) - 1, 0, -1) if self.buffer.endswith(tag[:n])), 0)
+            emit = self.buffer[: len(self.buffer) - keep]
+            if emit:
+                out.append((REASONING if self.inside else TEXT, emit))
+            self.buffer = self.buffer[len(self.buffer) - keep :]
+            break
+        return out
+
+    def flush(self) -> list[tuple[str, str]]:
+        rest, self.buffer = self.buffer, ""
+        return [(REASONING if self.inside else TEXT, rest)] if rest else []
+
+
 async def _stream_http(
     url: str, payload: dict, headers: dict, parse, timeout: float
-) -> AsyncIterator[str]:
+) -> AsyncIterator[tuple[str, str]]:
+    splitter = ThinkSplitter()
     try:
         async with (
             httpx.AsyncClient(
@@ -96,64 +139,85 @@ async def _stream_http(
             if response.status_code != 200:
                 raise _http_failure(response.status_code, response.headers)
             async for line in response.aiter_lines():
-                delta = parse(line)
-                if delta:
-                    yield delta
+                reasoning, text = parse(line)
+                if reasoning:
+                    yield REASONING, reasoning
+                for piece in splitter.feed(text) if text else ():
+                    yield piece
+            for piece in splitter.flush():
+                yield piece
     except httpx.TimeoutException as exc:
         raise ProviderFailure("timeout", "Provider timed out") from exc
     except httpx.HTTPError as exc:
         raise ProviderFailure("unavailable", "Provider connection failed") from exc
 
 
-def _parse_groq(line: str) -> str:
+def _parse_groq(line: str) -> tuple[str, str]:
     if not line.startswith("data:"):
-        return ""
+        return "", ""
     data = line[5:].strip()
     if not data or data == "[DONE]":
-        return ""
+        return "", ""
     try:
         event = json.loads(data)
     except ValueError:
-        return ""
+        return "", ""
     if event.get("error"):
         raise ProviderFailure("unavailable", "Provider stopped generation")
     choices = event.get("choices") or []
-    return (choices[0].get("delta") or {}).get("content") or "" if choices else ""
+    delta = (choices[0].get("delta") or {}) if choices else {}
+    return delta.get("reasoning") or "", delta.get("content") or ""
 
 
-def _parse_ollama(line: str) -> str:
+def _parse_ollama(line: str) -> tuple[str, str]:
     if not line.strip():
-        return ""
+        return "", ""
     try:
         event = json.loads(line)
     except ValueError:
-        return ""
+        return "", ""
     if event.get("error"):
         raise ProviderFailure("unavailable", "Ollama reported an error")
-    return (event.get("message") or {}).get("content") or ""
+    message = event.get("message") or {}
+    return message.get("thinking") or "", message.get("content") or ""
 
 
-async def stream_groq(model, system, history, image) -> AsyncIterator[str]:
+async def stream_groq(model, system, history, image) -> AsyncIterator[tuple[str, str]]:
     settings = get_settings()
     payload = {
         "model": model,
         "messages": _openai_messages(system, history, image, "groq"),
         "stream": True,
-        "max_completion_tokens": 1500,
+        "max_completion_tokens": 4000,
         "temperature": 0.3,
     }
     headers = {"Authorization": f"Bearer {settings.groq_api_key}"}
-    async for delta in _stream_http(
-        "https://api.groq.com/openai/v1/chat/completions",
-        payload,
-        headers,
-        _parse_groq,
-        settings.llm_timeout_seconds,
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    async for piece in _reasoning_first(
+        model, url, payload, {"reasoning_format": "parsed"}, headers, _parse_groq
     ):
-        yield delta
+        yield piece
 
 
-async def stream_ollama(model, system, history, image) -> AsyncIterator[str]:
+async def _reasoning_first(model, url, payload, option, headers, parse):
+    """Ask reasoning models to return their thinking separately; models that reject the
+    option are retried without it (raw <think> tags are still split out of the text)."""
+    timeout = get_settings().llm_timeout_seconds
+    if REASONING_MODELS.search(model):
+        produced = False
+        try:
+            async for piece in _stream_http(url, {**payload, **option}, headers, parse, timeout):
+                produced = True
+                yield piece
+            return
+        except ProviderFailure as failure:
+            if produced or failure.kind != "bad_request":
+                raise
+    async for piece in _stream_http(url, payload, headers, parse, timeout):
+        yield piece
+
+
+async def stream_ollama(model, system, history, image) -> AsyncIterator[tuple[str, str]]:
     settings = get_settings()
     headers = (
         {"Authorization": f"Bearer {settings.ollama_api_key}"} if settings.ollama_api_key else {}
@@ -163,17 +227,18 @@ async def stream_ollama(model, system, history, image) -> AsyncIterator[str]:
         "messages": _openai_messages(system, history, image, "ollama"),
         "stream": True,
     }
-    async for delta in _stream_http(
+    async for piece in _reasoning_first(
+        model,
         f"{settings.ollama_base_url}/api/chat",
         payload,
+        {"think": True},
         headers,
         _parse_ollama,
-        settings.llm_timeout_seconds,
     ):
-        yield delta
+        yield piece
 
 
-async def stream_gemini(model, system, history, image) -> AsyncIterator[str]:
+async def stream_gemini(model, system, history, image) -> AsyncIterator[tuple[str, str]]:
     from google import genai
     from google.genai import errors as genai_errors
     from google.genai import types
@@ -190,15 +255,34 @@ async def stream_gemini(model, system, history, image) -> AsyncIterator[str]:
         contents.append(
             types.Content(role="user" if item["role"] == "user" else "model", parts=parts)
         )
-    try:
-        stream = await client.aio.models.generate_content_stream(
-            model=model,
-            contents=contents,
-            config=types.GenerateContentConfig(system_instruction=system, temperature=0.3),
+
+    def config(thoughts: bool):
+        return types.GenerateContentConfig(
+            system_instruction=system,
+            temperature=0.3,
+            thinking_config=types.ThinkingConfig(include_thoughts=True) if thoughts else None,
         )
-        async for chunk in stream:
-            if chunk.text:
-                yield chunk.text
+
+    produced = False
+    try:
+        for thoughts in (True, False):
+            try:
+                stream = await client.aio.models.generate_content_stream(
+                    model=model, contents=contents, config=config(thoughts)
+                )
+                async for chunk in stream:
+                    for candidate in chunk.candidates or []:
+                        for part in (candidate.content.parts if candidate.content else None) or []:
+                            if not part.text:
+                                continue
+                            produced = True
+                            yield (REASONING if part.thought else TEXT), part.text
+                return
+            except genai_errors.APIError as exc:
+                # Models without thinking support reject include_thoughts: retry without it.
+                if thoughts and not produced and int(exc.code or 0) == 400:
+                    continue
+                raise
     except genai_errors.APIError as exc:
         raise _http_failure(int(exc.code or 500)) from exc
     except (httpx.TimeoutException, TimeoutError) as exc:

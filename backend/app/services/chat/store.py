@@ -27,6 +27,8 @@ def _message(row) -> dict:
         "steps": json.loads(row["steps"]) if row["steps"] else [],
         "created": row["created"],
         "edited": bool(row["edited"]),
+        "reasoning": row["reasoning"] or "",
+        **(json.loads(row["extras"]) if row["extras"] else {}),
     }
 
 
@@ -122,7 +124,8 @@ def add_message(thread_id: str, role: str, content: str, **extra) -> dict:
         ).fetchone()[0]
         db.execute(
             "INSERT INTO chat_messages (id, thread_id, seq, role, content, image, provider, model,"
-            " status, steps, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " status, steps, created, reasoning, extras)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 message_id,
                 thread_id,
@@ -135,6 +138,8 @@ def add_message(thread_id: str, role: str, content: str, **extra) -> dict:
                 extra.get("status", "complete"),
                 json.dumps(extra.get("steps") or []),
                 stamp,
+                extra.get("reasoning") or None,
+                json.dumps(extra["extras"]) if extra.get("extras") else None,
             ),
         )
         db.execute("UPDATE chat_threads SET updated = ? WHERE id = ?", (stamp, thread_id))
@@ -196,4 +201,47 @@ def history(thread_id: str, limit: int = 16) -> list[dict]:
         ).fetchall()
     return [
         {"role": r["role"], "content": r["content"][:6000]} for r in reversed(rows) if r["content"]
+    ]
+
+
+def set_case(thread_id: str, case: dict | None) -> None:
+    with connect() as db:
+        db.execute(
+            "UPDATE chat_threads SET case_context = ? WHERE id = ?",
+            (json.dumps(case) if case else None, thread_id),
+        )
+
+
+def save_assets(thread_id: str, assets: list[dict], replace: bool = True) -> None:
+    """Images the assistant can show later: annotated slices, model crops, focus maps."""
+    with connect() as db:
+        if replace:
+            db.execute("DELETE FROM chat_assets WHERE thread_id = ?", (thread_id,))
+        db.executemany(
+            "INSERT OR REPLACE INTO chat_assets (thread_id, key, caption, image)"
+            " VALUES (?, ?, ?, ?)",
+            [(thread_id, a["key"], a["caption"], a["image"]) for a in assets],
+        )
+
+
+def asset_keys(thread_id: str) -> set[str]:
+    with connect() as db:
+        return {
+            row[0]
+            for row in db.execute("SELECT key FROM chat_assets WHERE thread_id = ?", (thread_id,))
+        }
+
+
+def get_assets(thread_id: str, keys: list[str]) -> list[dict]:
+    if not keys:
+        return []
+    with connect() as db:
+        rows = {
+            row["key"]: row
+            for row in db.execute("SELECT * FROM chat_assets WHERE thread_id = ?", (thread_id,))
+        }
+    return [
+        {"key": key, "caption": rows[key]["caption"], "image": rows[key]["image"]}
+        for key in keys
+        if key in rows
     ]

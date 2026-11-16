@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import clsx from "clsx";
-import { Check, MessageSquarePlus, Pencil, Search, Trash2, X } from "lucide-react";
+import { Check, Loader2, MessageSquarePlus, Pencil, Search, Trash2, X } from "lucide-react";
 import type { ThreadSummary } from "./types";
 
 function groupLabel(iso: string): string {
@@ -125,8 +125,16 @@ export default function ThreadSidebar({
                             : "text-ink/80 hover:bg-paper/70",
                         )}
                       >
-                        {thread.has_case && (
-                          <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-cobalt align-middle" />
+                        {thread.running ? (
+                          <Loader2
+                            size={13}
+                            aria-label="Answer being written"
+                            className="mr-1.5 inline-block animate-spin align-[-2px] text-cobalt"
+                          />
+                        ) : (
+                          thread.has_case && (
+                            <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-cobalt align-middle" />
+                          )
                         )}
                         {thread.title}
                       </button>

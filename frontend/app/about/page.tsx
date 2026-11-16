@@ -1,9 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import SeriesToGrade from "@/features/about/series-to-grade";
 
 export const metadata: Metadata = { title: "How it works" };
 
 const STAGES = [
+  {
+    title: "Read the series",
+    text: "Every slice of the series is read, identifiers are removed in memory and the slices are stacked in order.",
+  },
   {
     title: "Locate the levels in 3D",
     text: "The whole series is resampled into a volume (32 slices for sagittal, 96 for axial). A 3D MobileNetV3 predicts where each disc level sits: left-right, up-down and which slice.",
@@ -37,19 +42,7 @@ export default function AboutPage() {
       </p>
 
       <h2 className="mt-12 text-2xl font-bold">From series to grade</h2>
-      <ol className="mt-5 space-y-6">
-        {STAGES.map((stage, index) => (
-          <li key={stage.title} className="flex gap-4">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-ink font-bold text-white">
-              {index + 1}
-            </span>
-            <div>
-              <h3 className="font-semibold">{stage.title}</h3>
-              <p className="mt-1 leading-relaxed text-graphite">{stage.text}</p>
-            </div>
-          </li>
-        ))}
-      </ol>
+      <SeriesToGrade stages={STAGES} />
       <p className="mt-6 leading-relaxed text-graphite">
         A single slice skips the 3D steps: a YOLO detector finds the levels on that image and each
         one is graded the same way.

@@ -9,6 +9,7 @@ from app.core.security import limiter
 from app.db import database
 from app.jobs import queue
 from app.services.chat.router import cooldowns
+from app.services.chat.runs import runs
 
 
 @pytest.fixture(autouse=True)
@@ -25,7 +26,9 @@ def isolated(tmp_path, monkeypatch):
     queue.reset_queue()
     limiter.reset()
     cooldowns.clear()
+    runs.clear()
     yield
+    runs.clear()
     config.get_settings.cache_clear()
     queue.reset_queue()
 

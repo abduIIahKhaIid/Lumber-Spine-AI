@@ -10,7 +10,7 @@ from app.jobs import runner
 from app.main import create_app
 
 
-def fake_analysis(kind, upload_path, progress):
+def fake_analysis(kind, upload_path, progress, submitted_at=None):
     from pathlib import Path
 
     Path(upload_path).unlink(missing_ok=True)
@@ -66,7 +66,7 @@ def test_multi_accepts_loose_dicom_slices(monkeypatch):
 
     seen = {}
 
-    def capture(kind, upload_path, progress):
+    def capture(kind, upload_path, progress, submitted_at=None):
         with zf.ZipFile(upload_path) as archive:
             seen["names"] = archive.namelist()
         return fake_analysis(kind, upload_path, lambda *_: None) if kind == "single" else {}
@@ -82,7 +82,9 @@ def test_multi_accepts_loose_dicom_slices(monkeypatch):
 
 
 def test_report_pdf_for_finished_job(monkeypatch, sample_result):
-    monkeypatch.setattr(runner, "analyze_upload", lambda kind, path, progress: sample_result)
+    monkeypatch.setattr(
+        runner, "analyze_upload", lambda kind, path, progress, submitted_at=None: sample_result
+    )
     with TestClient(create_app()) as client:
         job = client.post("/api/scans/multi", files={"file": ("s.zip", b"PK")}).json()["job_id"]
         poll(client, job)
@@ -129,3 +131,43 @@ def test_celery_worker_round_trip(monkeypatch):
             timeout=60,
         )
         assert failed["state"] == "failed" and "mixes series" in failed["error"]
+
+
+def test_stage_clock_sums_consecutive_stage_messages():
+    from app.jobs.runner import StageClock
+
+    clock = StageClock(lambda *_: None)
+    clock.marks = [
+        (0.0, "Read and de-identify"),
+        (1.0, "Locate levels in 3D"),
+        (4.0, "Grade each level"),
+        (5.0, "Grade each level"),
+        (7.0, "Render slices"),
+    ]
+    stages = {s["name"]: s["seconds"] for s in clock.stages(8.0)}
+    assert stages == {
+        "Read and de-identify": 1.0,
+        "Locate levels in 3D": 3.0,
+        "Grade each level": 3.0,
+        "Render slices": 1.0,
+    }
+
+
+def test_progress_reports_live_step_timing():
+    from app.jobs.queue import with_live_timing
+    from app.jobs.runner import StageClock
+
+    seen = []
+    clock = StageClock(lambda value, message, timing: seen.append(timing))
+    clock(5, "Reading DICOM archive")
+    clock(20, "Stage 1: locating spinal levels in 3D")
+    clock(60, "Stage 3: grading L1/L2")
+    clock(70, "Stage 3: grading L2/L3")
+    assert seen[0]["stages"] == [] and seen[0]["stage"] == "Read and de-identify"
+    assert [s["name"] for s in seen[-1]["stages"]] == [
+        "Read and de-identify",
+        "Locate levels in 3D",
+    ]
+    assert seen[-1]["stage"] == "Grade each level"
+    doc = with_live_timing({"state": "running"}, seen[-1])
+    assert doc["timing"]["stage_elapsed"] >= 0

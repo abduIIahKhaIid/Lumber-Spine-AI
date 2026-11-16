@@ -93,7 +93,7 @@ class Step:
 
 @dataclass
 class RouteEvent:
-    type: str  # step | start | delta | reset | done | exhausted
+    type: str  # step | start | reasoning | delta | reset | done | exhausted
     text: str = ""
     step: Step | None = None
     candidate: Candidate | None = None
@@ -126,15 +126,22 @@ async def route(system: str, history: list[dict], image: str | None) -> AsyncIte
         yield RouteEvent("step", step=step)
     for candidate in ready + waiting:
         started = time.monotonic()
-        produced = False
+        produced = answered = False
         yield RouteEvent("start", candidate=candidate)
         try:
-            async for delta in providers.ADAPTERS[candidate.provider](
+            async for piece in providers.ADAPTERS[candidate.provider](
                 candidate.model, system, history, image
             ):
+                kind, text = piece if isinstance(piece, tuple) else (providers.TEXT, piece)
+                if not text:
+                    continue
                 produced = True
-                yield RouteEvent("delta", text=delta)
-            if not produced:
+                if kind == providers.REASONING:
+                    yield RouteEvent("reasoning", text=text)
+                else:
+                    answered = answered or bool(text.strip())
+                    yield RouteEvent("delta", text=text)
+            if not answered:
                 raise ProviderFailure("empty", "Empty answer")
         except ProviderFailure as failure:
             cooldowns.penalize(candidate, failure)

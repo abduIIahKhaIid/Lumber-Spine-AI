@@ -85,7 +85,21 @@ export type AnalysisResult = {
   };
   slice_count?: number;
   created_at: string;
+  timings?: ServerTimings;
 };
+
+/** Measured on the worker: queue wait and model run, with the model run split by stage. */
+export type ServerTimings = {
+  submitted_at: number | null;
+  started_at: number;
+  finished_at: number;
+  queue_seconds: number | null;
+  model_seconds: number;
+  stages: StageTime[];
+};
+
+/** Measured in the browser around the server timings. */
+export type ClientTimings = { upload_seconds: number | null; total_seconds: number | null };
 
 export type JobStatus = {
   id: string;
@@ -94,4 +108,8 @@ export type JobStatus = {
   message: string;
   result?: AnalysisResult;
   error?: string;
+  /** While running: finished steps and how long the current one has been going. */
+  timing?: { stages: StageTime[]; stage: string | null; stage_elapsed: number };
 };
+
+export type StageTime = { name: string; seconds: number };

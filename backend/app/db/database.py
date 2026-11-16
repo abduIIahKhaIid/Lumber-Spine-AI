@@ -27,7 +27,22 @@ SCHEMA = (
     " edited INTEGER NOT NULL DEFAULT 0)",
     "CREATE INDEX IF NOT EXISTS chat_messages_thread ON chat_messages(thread_id, seq)",
     "CREATE INDEX IF NOT EXISTS chat_threads_updated ON chat_threads(updated)",
+    "CREATE TABLE IF NOT EXISTS chat_assets (thread_id TEXT NOT NULL REFERENCES chat_threads(id)"
+    " ON DELETE CASCADE, key TEXT NOT NULL, caption TEXT NOT NULL, image TEXT NOT NULL,"
+    " PRIMARY KEY(thread_id, key))",
 )
+
+# Columns added after the first release; applied to existing databases on start.
+COLUMNS = {"chat_messages": {"reasoning": "TEXT", "extras": "TEXT"}}
+
+
+def _migrate(db: sqlite3.Connection) -> None:
+    for table, columns in COLUMNS.items():
+        present = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}  # noqa: S608
+        for name, kind in columns.items():
+            if name not in present:
+                db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
+
 
 _initialized: set[Path] = set()
 
@@ -47,6 +62,7 @@ def connect() -> Iterator[sqlite3.Connection]:
         db.execute("PRAGMA journal_mode = WAL")
         for statement in SCHEMA:
             db.execute(statement)
+        _migrate(db)
         db.commit()
         _initialized.add(path)
     try:

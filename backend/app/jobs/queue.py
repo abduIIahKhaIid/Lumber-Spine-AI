@@ -31,6 +31,17 @@ class JobQueue(Protocol):
     def health(self) -> dict: ...
 
 
+def with_live_timing(doc: dict, timing: dict | None) -> dict:
+    """Adds the finished steps' times and how long the current step has been running."""
+    if timing and doc.get("state") == "running":
+        doc["timing"] = {
+            "stages": timing.get("stages", []),
+            "stage": timing.get("stage"),
+            "stage_elapsed": round(max(0.0, time.time() - timing.get("stage_started_at", 0)), 3),
+        }
+    return doc
+
+
 def _doc(job_id, state, progress=0, message="", result=None, error=None) -> dict:
     doc = {"id": job_id, "state": state, "progress": progress, "message": message}
     if result is not None:
@@ -56,7 +67,7 @@ class LocalQueue:
             if job_id in self._jobs:
                 self._jobs[job_id].update(changes)
 
-    def _run(self, job_id: str, kind: str, upload_path: Path) -> None:
+    def _run(self, job_id: str, kind: str, upload_path: Path, submitted_at: float) -> None:
         from app.jobs.runner import JobError, analyze_upload
 
         self._update(job_id, state="running", message="Starting analysis")
@@ -64,7 +75,10 @@ class LocalQueue:
             result = analyze_upload(
                 kind,
                 str(upload_path),
-                lambda value, message: self._update(job_id, progress=int(value), message=message),
+                lambda value, message, timing=None: self._update(
+                    job_id, progress=int(value), message=message, timing=timing
+                ),
+                submitted_at,
             )
         except JobError as exc:
             self._update(job_id, state="failed", error=str(exc), message="Analysis failed")
@@ -88,13 +102,16 @@ class LocalQueue:
                 **_doc(job_id, "queued", message="Waiting for the analysis worker"),
                 "created": time.time(),
             }
-        self._executor.submit(self._run, job_id, kind, upload_path)
+        self._executor.submit(self._run, job_id, kind, upload_path, time.time())
         return job_id
 
     def status(self, job_id: str) -> dict | None:
         with self._lock:
             job = self._jobs.get(job_id)
-            return None if job is None else {k: v for k, v in job.items() if k != "created"}
+            if job is None:
+                return None
+            doc = {k: v for k, v in job.items() if k not in ("created", "timing")}
+        return with_live_timing(doc, job.get("timing"))
 
     def health(self) -> dict:
         return {"backend": self.name, "ready": True}
@@ -111,7 +128,7 @@ class CeleryQueue:
     def submit(self, kind: str, upload_path: Path) -> str:
         from app.worker.celery_app import ANALYZE_TASK
 
-        return self.app.send_task(ANALYZE_TASK, args=[kind, str(upload_path)]).id
+        return self.app.send_task(ANALYZE_TASK, args=[kind, str(upload_path), time.time()]).id
 
     def status(self, job_id: str) -> dict | None:
         from celery.result import AsyncResult
@@ -124,7 +141,8 @@ class CeleryQueue:
             return _doc(job_id, "running", 2, "Worker started")
         if state == "PROGRESS":
             meta = result.info if isinstance(result.info, dict) else {}
-            return _doc(job_id, "running", meta.get("progress", 0), meta.get("message", ""))
+            doc = _doc(job_id, "running", meta.get("progress", 0), meta.get("message", ""))
+            return with_live_timing(doc, meta.get("timing"))
         if state == "SUCCESS":
             payload = result.result or {}
             if payload.get("ok"):

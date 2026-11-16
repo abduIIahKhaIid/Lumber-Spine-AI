@@ -22,7 +22,8 @@ import FindingDetail, { SeverityBadge } from "./finding-detail";
 import Recommendations from "./recommendations";
 import SaveCaseDialog from "./save-case-dialog";
 import SpineLadder from "./spine-ladder";
-import type { AnalysisResult, JobStatus, ScanMode } from "./types";
+import type { AnalysisResult, ClientTimings, JobStatus, ScanMode } from "./types";
+import { StepTimings, formatSeconds, liveStepTimes, useTicker } from "./request-timing";
 import { useAnalysis } from "./use-analysis";
 
 const COPY: Record<
@@ -75,7 +76,13 @@ export default function ScanStudio({ mode }: { mode: ScanMode }) {
   return (
     <div className="mx-auto max-w-[90rem] px-4 pb-16 pt-8 sm:px-6">
       {phase.name === "done" ? (
-        <Results result={phase.result} jobId={phase.jobId} onReset={reset} />
+        <Results
+          result={phase.result}
+          jobId={phase.jobId}
+          timing={phase.timing}
+          steps={copy.stages.map(([, label]) => label)}
+          onReset={reset}
+        />
       ) : (
         <div className="grid gap-8 lg:grid-cols-[1fr_1.15fr] lg:items-start">
           <div className="max-w-xl pt-2">
@@ -102,6 +109,9 @@ export default function ScanStudio({ mode }: { mode: ScanMode }) {
               stages={copy.stages}
               uploading={phase.name === "uploading" ? phase.progress : null}
               job={phase.name === "processing" ? phase.job : null}
+              received={phase.name === "processing" ? phase.received : 0}
+              uploadSeconds={phase.name === "processing" ? phase.upload_seconds : null}
+              queuedSince={phase.name === "processing" ? phase.queued_since : null}
               onCancel={reset}
             />
           )}
@@ -273,15 +283,24 @@ function Progress({
   stages,
   uploading,
   job,
+  received,
+  uploadSeconds,
+  queuedSince,
   onCancel,
 }: {
   stages: [number, string][];
   uploading: number | null;
   job: JobStatus | null;
+  received: number;
+  uploadSeconds: number | null;
+  queuedSince: number | null;
   onCancel: () => void;
 }) {
   const value = uploading !== null ? Math.round(uploading * 0.05) : Math.max(5, job?.progress ?? 0);
   const queued = job?.state === "queued";
+  const now = useTicker(uploading === null && !!job);
+  const { times, current } = liveStepTimes(job, received, now);
+  const finished = new Set(job?.timing?.stages.map((s) => s.name) ?? []);
   return (
     <section className="panel p-6" aria-live="polite">
       <div className="flex items-center gap-3">
@@ -296,16 +315,37 @@ function Progress({
           style={{ width: `${value}%` }}
         />
       </div>
-      <ol className="mt-6 space-y-3">
+      {(uploadSeconds !== null || queued) && (
+        <p className="mt-4 text-sm text-graphite">
+          {uploadSeconds !== null && <>Uploaded in {formatSeconds(uploadSeconds)}</>}
+          {queued && queuedSince !== null && (
+            <>
+              {uploadSeconds !== null ? ", " : ""}waiting in the queue{" "}
+              <span className="tabular-nums">{formatSeconds((now - queuedSince) / 1000)}</span>
+            </>
+          )}
+        </p>
+      )}
+      <ol className="mt-5 space-y-3">
         {stages.map(([at, label], index) => {
           const next = stages[index + 1]?.[0] ?? 101;
-          const state =
-            value >= next ? "done" : value >= at && uploading === null ? "active" : "todo";
+          const state = job?.timing
+            ? finished.has(label)
+              ? "done"
+              : current === label
+                ? "active"
+                : "todo"
+            : value >= next
+              ? "done"
+              : value >= at && uploading === null
+                ? "active"
+                : "todo";
+          const seconds = times.get(label);
           return (
             <li key={label} className="flex items-center gap-3">
               <span
                 className={clsx(
-                  "flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold",
+                  "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold",
                   state === "done" && "bg-cobalt text-white",
                   state === "active" && "bg-cobalt-wash text-cobalt-deep ring-2 ring-cobalt",
                   state === "todo" && "bg-bone text-graphite",
@@ -314,6 +354,16 @@ function Progress({
                 {index + 1}
               </span>
               <span className={state === "todo" ? "text-graphite" : "font-medium"}>{label}</span>
+              {seconds !== undefined && state !== "todo" && (
+                <span
+                  className={clsx(
+                    "ml-auto tabular-nums",
+                    state === "active" ? "text-cobalt-deep" : "font-semibold",
+                  )}
+                >
+                  {formatSeconds(seconds)}
+                </span>
+              )}
             </li>
           );
         })}
@@ -348,13 +398,46 @@ function shrink(png: string, side: number): Promise<string> {
   });
 }
 
+/** Annotated slices, model crops and focus maps the assistant can show when asked. */
+async function chatAssets(result: AnalysisResult) {
+  const used = new Set(result.findings.map((f) => f.image_index));
+  const assets: { key: string; caption: string; image: string }[] = [];
+  for (const image of result.images.filter((img) => used.has(img.index)).slice(0, 12)) {
+    assets.push({
+      key: `slice:${image.index}`,
+      caption: `${image.slice_number ? `Slice ${image.slice_number}` : "Image"} with level boxes`,
+      image: await shrink(image.annotated, 900),
+    });
+  }
+  for (const f of result.findings) {
+    const name = `${f.id} ${f.level_label}, ${f.severity}`;
+    if (f.explanation.heatmap_image)
+      assets.push({
+        key: `focus:${f.id}`,
+        caption: `Focus map ${name}`,
+        image: await shrink(f.explanation.heatmap_image, 400),
+      });
+    if (f.explanation.crop_image)
+      assets.push({
+        key: `crop:${f.id}`,
+        caption: `Model input ${name}`,
+        image: await shrink(f.explanation.crop_image, 400),
+      });
+  }
+  return assets.slice(0, 60);
+}
+
 function Results({
   result,
   jobId,
+  timing,
+  steps,
   onReset,
 }: {
   result: AnalysisResult;
   jobId: string;
+  timing: ClientTimings;
+  steps: string[];
   onReset: () => void;
 }) {
   const router = useRouter();
@@ -407,6 +490,7 @@ function Results({
             recommendations: result.recommendations,
           },
           preview_image: image ? await shrink(image.annotated, 720) : null,
+          assets: await chatAssets(result),
         }),
       );
       router.push(`/assistant?thread=${thread.id}`);
@@ -444,6 +528,11 @@ function Results({
           </button>
         </div>
       </header>
+      {result.timings && (
+        <div className="rounded-xl border border-rule bg-paper px-4 py-3">
+          <StepTimings steps={steps} server={result.timings} client={timing} />
+        </div>
+      )}
       {notice && (
         <p role="status" className="rounded-lg bg-cobalt-wash p-3 text-sm text-cobalt-deep">
           {notice}

@@ -20,8 +20,8 @@ const CASE_STARTERS = [
     prompt: "Which level in this result should my doctor look at first, and why?",
   },
   {
-    title: "Colors and scores",
-    prompt: "What do the colors and the percentage scores in this result mean?",
+    title: "Show the worst level",
+    prompt: "Show me the box and focus map of the most severe level.",
   },
   {
     title: "Urdu mein samjhao",
@@ -171,8 +171,8 @@ export default function AssistantApp() {
                 Ask about lumbar MRI findings
               </h2>
               <p className="mt-2 max-w-md text-graphite">
-                Questions about grades, levels and symptoms. Open a scan result and choose
-                &ldquo;Ask the assistant&rdquo; to discuss that result.
+                Questions about grades, levels and symptoms. Attach a DICOM file or a series ZIP
+                with the paperclip and the SpineScope models will analyse it here.
               </p>
               <div className="mt-8 grid w-full gap-3 sm:grid-cols-2">
                 {STARTERS.map((starter) => (
@@ -216,9 +216,9 @@ export default function AssistantApp() {
         )}
         <Composer
           streaming={chat.streaming}
-          onSend={(text, image) => {
+          onSend={(text, image, scan) => {
             setDraft(undefined);
-            void chat.send(text, image, language);
+            void chat.send(text, image, language, scan);
           }}
           onStop={chat.stop}
           initial={draft}

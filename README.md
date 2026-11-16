@@ -27,6 +27,11 @@ disc levels (L1/L2 to L5/S1) as **Normal/Mild**, **Moderate** or **Severe**:
   earlier message and resend; regenerate; stop; image and DICOM attachments; English or Urdu.
   **Automatic LLM fallback**: Groq → Gemini → Ollama (configurable). A rate limit, timeout or
   error switches to the next model without any setting change, and failing models cool down.
+  Reasoning models show their thinking in a collapsible panel. Attach a DICOM file or series
+  ZIP and the SpineScope models analyse it inside the chat (animated progress, result images);
+  ask for a level ("show the L4/L5 box") and its slice, focus map and crop are shown. Answers
+  keep running on the server if the page is closed, and reopening the chat follows them.
+- **Step timings**: every analysis step shows its time live, plus upload, queue and total.
 - **Background jobs**: Celery workers with Redis; the API only queues work. Without Redis the API
   falls back to an in-process queue, so local development needs nothing extra.
 - **Case library**: save structured findings (never images), review each level, sign off,

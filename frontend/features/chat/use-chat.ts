@@ -2,12 +2,19 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, jsonBody, sseEvents } from "@/lib/api";
-import type { ChatMessage, StreamEvent, Thread, ThreadSummary } from "./types";
+import type { ChatMessage, ScanAttachment, StreamEvent, Thread, ThreadSummary } from "./types";
 
 const PENDING = "pending-assistant";
 
 function pendingMessage(): ChatMessage {
-  return { id: PENDING, role: "assistant", content: "", status: "streaming", steps: [] };
+  return {
+    id: PENDING,
+    client_key: `answer-${Date.now()}`,
+    role: "assistant",
+    content: "",
+    status: "streaming",
+    steps: [],
+  };
 }
 
 /** Thread list + active conversation + streaming, mirroring Chainlit's interaction model. */
@@ -20,6 +27,7 @@ export function useChat(initialThreadId: string | null) {
   const [error, setError] = useState("");
   const [loadingThread, setLoadingThread] = useState(false);
   const controller = useRef<AbortController | null>(null);
+  const follow = useRef<(path: string, body: unknown) => Promise<void>>(async () => {});
   const activeId = useRef<string | null | undefined>(undefined);
 
   useEffect(() => {
@@ -45,8 +53,11 @@ export function useChat(initialThreadId: string | null) {
     setLoadingThread(true);
     try {
       const loaded = await api<Thread>(`/api/chat/threads/${id}`);
+      activeId.current = loaded.id;
       setThread(loaded);
       setMessages(loaded.messages);
+      // The answer is still being written on the server: follow it from the start.
+      if (loaded.running) void follow.current(`/api/chat/threads/${id}/stream`, null);
     } catch (err) {
       setError((err as Error).message);
       setThread(null);
@@ -60,6 +71,14 @@ export function useChat(initialThreadId: string | null) {
     void refreshThreads();
   }, [refreshThreads]);
 
+  // Answers in other conversations keep running on the server: refresh their status.
+  const othersRunning = threads.some((t) => t.running && t.id !== activeId.current);
+  useEffect(() => {
+    if (!othersRunning) return;
+    const timer = setInterval(() => void refreshThreads(), 3000);
+    return () => clearInterval(timer);
+  }, [othersRunning, refreshThreads]);
+
   useEffect(() => {
     // The URL also changes when a new conversation is created mid-stream; do not reload then.
     if (activeId.current !== undefined && initialThreadId === activeId.current) return;
@@ -71,6 +90,7 @@ export function useChat(initialThreadId: string | null) {
     switch (event.type) {
       case "user_message":
         setMessages((current) => {
+          if (current.some((m) => m.id === event.message.id)) return current; // replayed
           if (event.replaces) {
             const index = current.findIndex((m) => m.id === event.replaces);
             return [...current.slice(0, Math.max(index, 0)), event.message];
@@ -110,16 +130,63 @@ export function useChat(initialThreadId: string | null) {
         break;
       case "reset":
         setMessages((current) =>
-          current.map((m) => (m.id === PENDING ? { ...m, content: "" } : m)),
+          current.map((m) =>
+            m.id === PENDING
+              ? { ...m, content: "", reasoning: "", reasoning_seconds: undefined }
+              : m,
+          ),
+        );
+        break;
+      case "reasoning":
+        setMessages((current) =>
+          current.map((m) =>
+            m.id === PENDING ? { ...m, reasoning: (m.reasoning ?? "") + event.text } : m,
+          ),
+        );
+        break;
+      case "reasoning_done":
+        setMessages((current) =>
+          current.map((m) => (m.id === PENDING ? { ...m, reasoning_seconds: event.seconds } : m)),
+        );
+        break;
+      case "tool":
+        setMessages((current) =>
+          current.map((m) => {
+            if (m.id !== PENDING) return m;
+            const tools = m.tools ?? [];
+            const known = tools.some((t) => t.id === event.tool.id);
+            return {
+              ...m,
+              tools: known
+                ? tools.map((t) => (t.id === event.tool.id ? event.tool : t))
+                : [...tools, event.tool],
+            };
+          }),
+        );
+        break;
+      case "elements":
+        setMessages((current) =>
+          current.map((m) => (m.id === PENDING ? { ...m, elements: event.elements } : m)),
+        );
+        break;
+      case "case":
+        setThread((current) =>
+          current ? { ...current, case_context: event.case, has_case: true } : current,
         );
         break;
       case "assistant_message":
-        setMessages((current) => current.map((m) => (m.id === PENDING ? event.message : m)));
+        setMessages((current) =>
+          current.map((m) =>
+            m.id === PENDING ? { ...event.message, client_key: m.client_key } : m,
+          ),
+        );
         break;
       case "error":
         if (event.assistant_message) {
           const message = event.assistant_message;
-          setMessages((current) => current.map((m) => (m.id === PENDING ? message : m)));
+          setMessages((current) =>
+            current.map((m) => (m.id === PENDING ? { ...message, client_key: m.client_key } : m)),
+          );
         } else {
           setError(event.message);
           setMessages((current) => current.filter((m) => m.id !== PENDING));
@@ -128,39 +195,48 @@ export function useChat(initialThreadId: string | null) {
     }
   }, []);
 
+  const reload = useCallback(async (id: string) => {
+    try {
+      const loaded = await api<Thread>(`/api/chat/threads/${id}`);
+      if (activeId.current !== id) return;
+      setThread(loaded);
+      setMessages(loaded.messages);
+    } catch {
+      /* keep what is shown */
+    }
+  }, []);
+
+  /** Streams a run. Aborting only detaches this page: the server keeps writing the answer. */
   const stream = useCallback(
     async (path: string, body: unknown) => {
       controller.current?.abort();
       const abort = new AbortController();
       controller.current = abort;
+      const threadId = activeId.current;
+      let stopped = false;
       setStreaming(true);
       setError("");
       setProviderLabel("");
       try {
         for await (const event of sseEvents<StreamEvent>(path, body, abort.signal)) {
-          apply(event);
+          if (event.type === "stopped") stopped = true;
+          else apply(event);
         }
       } catch (err) {
         setError((err as Error).message);
         setMessages((current) => current.filter((m) => m.id !== PENDING));
       } finally {
-        if (abort.signal.aborted) {
-          // Stopped by the user: keep what was written, marked as stopped.
-          setMessages((current) =>
-            current
-              .filter((m) => !(m.id === PENDING && !m.content))
-              .map((m) =>
-                m.id === PENDING ? { ...m, id: `stopped-${Date.now()}`, status: "stopped" } : m,
-              ),
-          );
+        if (controller.current === abort) {
+          controller.current = null;
+          setStreaming(false);
+          if (stopped && threadId) await reload(threadId);
         }
-        if (controller.current === abort) controller.current = null;
-        setStreaming(false);
         void refreshThreads();
       }
     },
-    [apply, refreshThreads],
+    [apply, refreshThreads, reload],
   );
+  follow.current = stream;
 
   const ensureThread = useCallback(
     async (language: "english" | "urdu"): Promise<Thread> => {
@@ -176,12 +252,28 @@ export function useChat(initialThreadId: string | null) {
   );
 
   const send = useCallback(
-    async (content: string, image: string | null, language: "english" | "urdu") => {
+    async (
+      content: string,
+      image: string | null,
+      language: "english" | "urdu",
+      scan: File[] | null = null,
+    ) => {
       try {
         const active = await ensureThread(language);
-        await stream(`/api/chat/threads/${active.id}/messages`, { content, image });
+        let attachment: ScanAttachment | null = null;
+        if (scan?.length) {
+          setStreaming(true);
+          const form = new FormData();
+          for (const file of scan) form.append("files", file);
+          attachment = await api<ScanAttachment>(`/api/chat/threads/${active.id}/attachments`, {
+            method: "POST",
+            body: form,
+          });
+        }
+        await stream(`/api/chat/threads/${active.id}/messages`, { content, image, attachment });
       } catch (err) {
         setError((err as Error).message);
+        setStreaming(false);
       }
     },
     [ensureThread, stream],
@@ -200,7 +292,21 @@ export function useChat(initialThreadId: string | null) {
     await stream(`/api/chat/threads/${thread.id}/regenerate`, {});
   }, [stream, thread]);
 
-  const stop = useCallback(() => controller.current?.abort(), []);
+  /** Ends the answer on the server; the partial answer is kept as "stopped". */
+  const stop = useCallback(async () => {
+    const id = activeId.current;
+    if (!id) return;
+    try {
+      await api(`/api/chat/threads/${id}/stop`, { method: "POST" });
+    } catch (err) {
+      setError((err as Error).message);
+    }
+    controller.current?.abort();
+    controller.current = null;
+    setStreaming(false);
+    await reload(id);
+    void refreshThreads();
+  }, [refreshThreads, reload]);
 
   const rename = useCallback(
     async (id: string, title: string) => {

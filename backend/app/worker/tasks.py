@@ -22,12 +22,15 @@ def _warm_models(**_kwargs) -> None:
 
 
 @celery_app.task(name=ANALYZE_TASK, bind=True)
-def analyze(self, kind: str, upload_path: str) -> dict:
-    def progress(value: int, message: str) -> None:
-        self.update_state(state="PROGRESS", meta={"progress": int(value), "message": message})
+def analyze(self, kind: str, upload_path: str, submitted_at: float | None = None) -> dict:
+    def progress(value, message, timing=None):
+        self.update_state(
+            state="PROGRESS",
+            meta={"progress": int(value), "message": message, "timing": timing},
+        )
 
     try:
-        return {"ok": True, "result": analyze_upload(kind, upload_path, progress)}
+        return {"ok": True, "result": analyze_upload(kind, upload_path, progress, submitted_at)}
     except JobError as exc:
         # Returned (not raised) so the user-facing message survives JSON result storage.
         return {"ok": False, "error": str(exc)}

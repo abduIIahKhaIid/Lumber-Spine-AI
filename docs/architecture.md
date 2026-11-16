@@ -52,8 +52,19 @@ against the architectures before strict loading was enabled.
   down (rate limit 60 s or `Retry-After`, auth 10 min, unknown model 1 h) and are tried last.
 - `services/chat/store.py` keeps threads and messages in SQLite. Editing a user message replaces
   it and deletes every later message, then answers again (Chainlit behaviour).
-- The scan context attached to a thread is reduced to structured findings; pixels never leave
-  the browser for the assistant unless the user attaches an image.
+- The scan context attached to a thread is reduced to structured findings; pixels never reach a
+  language model unless the user attaches an image. Annotated slices, crops and focus maps are
+  stored per thread (`chat_assets`) so the app can show them when asked.
+- `services/chat/runs.py` runs every answer as a server task. The HTTP stream only follows it:
+  closing the page detaches, `GET /threads/{id}/stream` replays and follows, and
+  `POST /threads/{id}/stop` ends it (the partial answer is kept as "stopped"). Runs live in the
+  API process, so the API runs as one process; scaling out would move them to Redis streams.
+- `services/chat/tools.py` holds the app-side tools: `analyze_scan` (an attached DICOM/ZIP goes
+  through the normal job queue; progress is streamed with a preview of the scan) and
+  `show_images` (level boxes, crops and focus maps for the levels the user names). The app runs
+  them, so they work with every model in the fallback chain, including models without tool calls.
+- Reasoning is read from Groq `reasoning_format=parsed`, Gemini thought parts, Ollama `thinking`,
+  and `<think>` tags; it is stored with the answer and shown only when a model sends it.
 
 ## Data stored
 

@@ -190,3 +190,212 @@ def test_result_preview_is_stored_but_never_sent_to_the_model(chain, sample_resu
     assert max(shrunk.size) == 720 and shrunk.format == "JPEG"
     assert "preview" not in system_prompt("english", stored).split("Scan context")[1]
     assert stored["preview"][:20] not in system_prompt("english", stored)
+
+
+def _png(size=(300, 200), colour="gray"):
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    buffer = BytesIO()
+    Image.new("RGB", size, colour).save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+def test_think_tags_are_split_across_chunks():
+    from app.services.chat.providers import ThinkSplitter
+
+    splitter = ThinkSplitter()
+    pieces = []
+    for chunk in ["<thi", "nk>Let me ", "check</th", "ink>\n\nThe answer", " is L4/L5."]:
+        pieces += splitter.feed(chunk)
+    pieces += splitter.flush()
+    reasoning = "".join(t for k, t in pieces if k == "reasoning")
+    text = "".join(t for k, t in pieces if k == "text")
+    assert reasoning == "Let me check"
+    assert text.strip() == "The answer is L4/L5."
+
+
+def test_provider_parsers_return_reasoning_and_text():
+    from app.services.chat.providers import _parse_groq, _parse_ollama
+
+    groq = 'data: {"choices":[{"delta":{"reasoning":"hmm","content":""}}]}'
+    assert _parse_groq(groq) == ("hmm", "")
+    assert _parse_ollama('{"message":{"thinking":"","content":"Hi"}}') == ("", "Hi")
+
+
+def test_reasoning_is_streamed_and_saved(chain):
+    chain(groq=[("reasoning", "Thinking about it. "), ("reasoning", "Done."), "Answer"])
+    with TestClient(create_app()) as client:
+        tid = client.post("/api/chat/threads", json={}).json()["id"]
+        events = sse(client.post(f"/api/chat/threads/{tid}/messages", json={"content": "q"}))
+        types = [e["type"] for e in events]
+        assert types.count("reasoning") == 2 and "reasoning_done" in types
+        assert types.index("reasoning_done") < types.index("delta")
+        saved = client.get(f"/api/chat/threads/{tid}").json()["messages"][1]
+    assert saved["reasoning"] == "Thinking about it. Done."
+    assert saved["content"] == "Answer" and "reasoning_seconds" in saved
+
+
+def test_answer_without_reasoning_has_no_thinking(chain):
+    chain(groq=["Plain answer"])
+    with TestClient(create_app()) as client:
+        tid = client.post("/api/chat/threads", json={}).json()["id"]
+        events = sse(client.post(f"/api/chat/threads/{tid}/messages", json={"content": "q"}))
+        saved = client.get(f"/api/chat/threads/{tid}").json()["messages"][1]
+    assert not any(e["type"].startswith("reasoning") for e in events)
+    assert saved["reasoning"] == "" and "reasoning_seconds" not in saved
+
+
+def test_reasoning_only_answer_falls_back(chain):
+    chain(groq=[("reasoning", "thinking but no answer")], gemini=["Real answer"])
+    events = collect(route("s", [{"role": "user", "content": "q"}], None))
+    assert events[-1].type == "done" and events[-1].candidate.provider == "gemini"
+
+
+def test_asking_for_a_box_shows_the_matching_images(chain, sample_result):
+    chain(groq=["Here is the L4/L5 box."])
+    sample_result["images"] = [{"index": 0, "slice_number": 7, "annotated": _png()}]
+    sample_result["findings"][1]["explanation"] = {
+        "crop_image": _png((64, 64)),
+        "heatmap_image": _png((64, 64), "red"),
+        "method": "Grad-CAM",
+    }
+    from app.services.chat.tools import assets_from_result
+
+    assets = assets_from_result(sample_result)
+    with TestClient(create_app()) as client:
+        tid = client.post(
+            "/api/chat/threads", json={"case_context": sample_result, "assets": assets}
+        ).json()["id"]
+        plain = sse(client.post(f"/api/chat/threads/{tid}/messages", json={"content": "Why?"}))
+        assert not any(e["type"] == "elements" for e in plain)
+        events = sse(
+            client.post(
+                f"/api/chat/threads/{tid}/messages",
+                json={"content": "L4-L5 ka box dikhao"},
+            )
+        )
+        tool = next(e["tool"] for e in events if e["type"] == "tool")
+        elements = next(e["elements"] for e in events if e["type"] == "elements")
+        saved = client.get(f"/api/chat/threads/{tid}").json()["messages"][-1]
+    assert tool["name"] == "show_images" and tool["status"] == "done"
+    assert [e["key"] for e in elements] == ["slice:0", "focus:F2", "crop:F2"]
+    assert saved["elements"][0]["data"] and saved["tools"][0]["name"] == "show_images"
+
+
+def test_attached_scan_is_analysed_by_the_tool(chain, sample_result, monkeypatch):
+    from app.jobs import runner
+
+    sample_result["images"] = [{"index": 0, "slice_number": 3, "annotated": _png()}]
+
+    def fake(kind, path, progress, submitted_at=None):
+        from pathlib import Path
+
+        Path(path).unlink()  # the real runner deletes uploads too
+        progress(40, "Stage 1: locating spinal levels in 3D")
+        return {**sample_result, "timings": {"model_seconds": 1.0, "queue_seconds": 0.1}}
+
+    monkeypatch.setattr(runner, "analyze_upload", fake)
+    chain(groq=["The scan shows a severe L4/L5 finding."])
+    with TestClient(create_app()) as client:
+        tid = client.post("/api/chat/threads", json={}).json()["id"]
+        attached = client.post(
+            f"/api/chat/threads/{tid}/attachments",
+            files=[("files", ("scan.zip", b"PK-not-really", "application/zip"))],
+        ).json()
+        assert attached["kind"] == "multi" and attached["name"] == "scan.zip"
+        events = sse(
+            client.post(
+                f"/api/chat/threads/{tid}/messages",
+                json={"content": "", "attachment": {"id": attached["id"], "name": "scan.zip"}},
+            )
+        )
+        tool_events = [e["tool"] for e in events if e["type"] == "tool"]
+        assert tool_events[0]["name"] == "analyze_scan"
+        done = [t for t in tool_events if t["name"] == "analyze_scan"][-1]
+        assert done["status"] == "done" and "1 severe" in done["message"]
+        assert any(e["type"] == "case" for e in events)
+        assert any(e["type"] == "elements" for e in events)
+        thread = client.get(f"/api/chat/threads/{tid}").json()
+        expired = client.post(
+            f"/api/chat/threads/{tid}/messages",
+            json={"content": "", "attachment": {"id": attached["id"], "name": "scan.zip"}},
+        )
+    assert thread["case_context"]["condition"] == "Spinal canal stenosis"
+    assert thread["messages"][0]["attachment"] == {"name": "scan.zip", "kind": "multi"}
+    assert thread["messages"][1]["tools"][0]["status"] == "done"
+    assert expired.status_code == 410
+
+
+def test_level_mentions_are_parsed():
+    from app.services.chat.tools import mentioned, wants_images
+
+    assert mentioned("show the left L4/L5 box") == ({"L4/L5"}, "left")
+    assert mentioned("L5-S1 aur L3 L4") == ({"L5/S1", "L3/L4"}, None)
+    assert wants_images("L4/L5 ki tasveer dikhao") and not wants_images("what is stenosis?")
+
+
+def slow_adapter(words, delay=0.05):
+    async def adapter(model, system, history, image):
+        for word in words:
+            await asyncio.sleep(delay)
+            yield word
+
+    return adapter
+
+
+def _wait_for(check, timeout=10.0):
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        value = check()
+        if value:
+            return value
+        time.sleep(0.05)
+    raise AssertionError("timed out")
+
+
+def test_answer_keeps_running_after_the_viewer_disconnects(monkeypatch):
+    monkeypatch.setattr(providers, "ADAPTERS", {"groq": slow_adapter(["a ", "b ", "c ", "done"])})
+    monkeypatch.setattr(providers, "candidates", lambda vision=False: [Candidate("groq", "m")])
+    with TestClient(create_app()) as client:
+        tid = client.post("/api/chat/threads", json={}).json()["id"]
+        with client.stream(
+            "POST", f"/api/chat/threads/{tid}/messages", json={"content": "q"}
+        ) as response:
+            next(response.iter_lines())  # read one event, then leave
+        assert client.get(f"/api/chat/threads/{tid}").json()["running"] is True
+        assert any(t["running"] for t in client.get("/api/chat/threads").json())
+        # Re-attaching replays the answer from the start.
+        replay = sse(client.get(f"/api/chat/threads/{tid}/stream"))
+        assert replay[0]["type"] == "user_message" and replay[-1]["type"] == "done"
+        thread = _wait_for(
+            lambda: (t := client.get(f"/api/chat/threads/{tid}").json())["running"] is False and t
+        )
+    assert thread["messages"][-1]["content"] == "a b c done"
+    assert thread["messages"][-1]["status"] == "complete"
+
+
+def test_stop_ends_the_run_and_keeps_the_partial_answer(monkeypatch):
+    monkeypatch.setattr(
+        providers, "ADAPTERS", {"groq": slow_adapter(["first "] + ["more "] * 50, 0.05)}
+    )
+    monkeypatch.setattr(providers, "candidates", lambda vision=False: [Candidate("groq", "m")])
+    with TestClient(create_app()) as client:
+        tid = client.post("/api/chat/threads", json={}).json()["id"]
+        with client.stream(
+            "POST", f"/api/chat/threads/{tid}/messages", json={"content": "q"}
+        ) as response:
+            for line in response.iter_lines():
+                if '"delta"' in line:
+                    break
+        busy = client.post(f"/api/chat/threads/{tid}/messages", json={"content": "again"})
+        assert busy.status_code == 409
+        assert client.post(f"/api/chat/threads/{tid}/stop").json() == {"stopped": True}
+        thread = client.get(f"/api/chat/threads/{tid}").json()
+    assert thread["running"] is False
+    assert thread["messages"][-1]["status"] == "stopped"
+    assert thread["messages"][-1]["content"].startswith("first")

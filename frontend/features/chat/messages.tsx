@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { SpineMark } from "@/components/app-shell";
 import CaseAttachment, { type CaseContext } from "./case-attachment";
+import { ImageElements, ScanChip, Thinking, ToolCard } from "./message-parts";
 import type { ChatMessage, Step } from "./types";
 
 const PROVIDER = { groq: "Groq", gemini: "Gemini", ollama: "Ollama" } as Record<string, string>;
@@ -162,6 +163,7 @@ function UserMessage({
         <Pencil size={15} />
       </button>
       <div className="rounded-2xl rounded-br-md bg-[#dde4ec] px-4 py-2.5">
+        {message.attachment && <ScanChip attachment={message.attachment} />}
         {message.image && (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -191,6 +193,8 @@ function AssistantMessage({
   onRegenerate: () => void;
 }) {
   const streaming = message.status === "streaming";
+  // After a scan analysis the result images take the place of the progress animation.
+  const analysed = message.tools?.some((t) => t.name === "analyze_scan" && t.status === "done");
   return (
     <div className="flex gap-3">
       <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ink">
@@ -198,6 +202,13 @@ function AssistantMessage({
       </span>
       <div className="min-w-0 flex-1">
         <Steps message={message} />
+        {message.tools
+          ?.filter((tool) => !(analysed && tool.name === "show_images"))
+          .map((tool) => (
+            <ToolCard key={tool.id} tool={tool} />
+          ))}
+        {analysed && message.elements?.length ? <ImageElements images={message.elements} /> : null}
+        <Thinking message={message} />
         {message.status === "error" ? (
           <p className="flex items-start gap-2 rounded-xl bg-sev-severe/10 p-3 text-sev-severe-ink">
             <AlertCircle size={18} className="mt-0.5 shrink-0" />
@@ -207,7 +218,7 @@ function AssistantMessage({
           <div className="prose-chat" dir="auto">
             {message.content ? (
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-            ) : streaming ? (
+            ) : streaming && !message.tools?.some((t) => t.status === "running") ? (
               <span className="inline-flex gap-1 py-2" aria-label="Writing">
                 <span className="h-2 w-2 animate-pulse rounded-full bg-graphite" />
                 <span className="h-2 w-2 animate-pulse rounded-full bg-graphite [animation-delay:150ms]" />
@@ -216,6 +227,7 @@ function AssistantMessage({
             ) : null}
           </div>
         )}
+        {!analysed && message.elements?.length ? <ImageElements images={message.elements} /> : null}
         {!streaming && (
           <div className="mt-1 flex items-center gap-1">
             {message.content && message.status !== "error" && <CopyButton text={message.content} />}
@@ -255,7 +267,7 @@ export default function MessageList({
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant")?.id;
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6">
-      {attachment && <CaseAttachment context={attachment} />}
+      {attachment && !messages.some((m) => m.attachment) && <CaseAttachment context={attachment} />}
       {messages.map((message) =>
         message.role === "user" ? (
           <UserMessage
@@ -266,7 +278,7 @@ export default function MessageList({
           />
         ) : (
           <AssistantMessage
-            key={message.id}
+            key={message.client_key ?? message.id}
             message={message}
             isLast={message.id === lastAssistant}
             disabled={streaming}

@@ -37,6 +37,9 @@ def clean_case(value) -> dict | None:
                 "condition": _text(item.get("condition_name") or item.get("condition"), 40),
                 "level": _text(item.get("level_label") or item.get("level"), 16),
                 "side": _text(item.get("side"), 8) or None,
+                "image_index": int(item.get("image_index") or 0)
+                if str(item.get("image_index") or 0).isdigit()
+                else 0,
                 "severity": _text(item.get("severity"), 16),
                 "scores": {
                     _text(k, 16): round(float(v), 3)
