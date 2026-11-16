@@ -140,11 +140,15 @@ async def _stream_http(
             if response.status_code != 200:
                 raise _http_failure(response.status_code, response.headers)
             async for line in response.aiter_lines():
-                reasoning, text = parse(line)
+                reasoning, text, done = parse(line)
                 if reasoning:
                     yield REASONING, reasoning
                 for piece in splitter.feed(text) if text else ():
                     yield piece
+                if done:
+                    # The provider said the answer is complete: stop here instead of waiting
+                    # for the connection to close (tunnels and proxies may keep it open).
+                    break
             for piece in splitter.flush():
                 yield piece
     except httpx.TimeoutException as exc:
@@ -153,34 +157,38 @@ async def _stream_http(
         raise ProviderFailure("unavailable", "Provider connection failed") from exc
 
 
-def _parse_groq(line: str) -> tuple[str, str]:
+def _parse_groq(line: str) -> tuple[str, str, bool]:
+    """(reasoning, text, done) for one server-sent-events line of an OpenAI-style stream."""
     if not line.startswith("data:"):
-        return "", ""
+        return "", "", False
     data = line[5:].strip()
-    if not data or data == "[DONE]":
-        return "", ""
+    if data == "[DONE]":
+        return "", "", True
+    if not data:
+        return "", "", False
     try:
         event = json.loads(data)
     except ValueError:
-        return "", ""
+        return "", "", False
     if event.get("error"):
         raise ProviderFailure("unavailable", "Provider stopped generation")
     choices = event.get("choices") or []
     delta = (choices[0].get("delta") or {}) if choices else {}
-    return delta.get("reasoning") or "", delta.get("content") or ""
+    return delta.get("reasoning") or "", delta.get("content") or "", False
 
 
-def _parse_ollama(line: str) -> tuple[str, str]:
+def _parse_ollama(line: str) -> tuple[str, str, bool]:
+    """(reasoning, text, done) for one line of Ollama's /api/chat stream."""
     if not line.strip():
-        return "", ""
+        return "", "", False
     try:
         event = json.loads(line)
     except ValueError:
-        return "", ""
+        return "", "", False
     if event.get("error"):
         raise ProviderFailure("unavailable", "Ollama reported an error")
     message = event.get("message") or {}
-    return message.get("thinking") or "", message.get("content") or ""
+    return message.get("thinking") or "", message.get("content") or "", bool(event.get("done"))
 
 
 async def stream_groq(model, system, history, image) -> AsyncIterator[tuple[str, str]]:

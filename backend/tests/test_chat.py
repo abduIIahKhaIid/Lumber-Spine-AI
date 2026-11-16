@@ -222,8 +222,10 @@ def test_provider_parsers_return_reasoning_and_text():
     from app.services.chat.providers import _parse_groq, _parse_ollama
 
     groq = 'data: {"choices":[{"delta":{"reasoning":"hmm","content":""}}]}'
-    assert _parse_groq(groq) == ("hmm", "")
-    assert _parse_ollama('{"message":{"thinking":"","content":"Hi"}}') == ("", "Hi")
+    assert _parse_groq(groq) == ("hmm", "", False)
+    assert _parse_groq("data: [DONE]") == ("", "", True)
+    assert _parse_ollama('{"message":{"thinking":"","content":"Hi"}}') == ("", "Hi", False)
+    assert _parse_ollama('{"message":{"content":"!"},"done":true}') == ("", "!", True)
 
 
 def test_reasoning_is_streamed_and_saved(chain):
@@ -555,3 +557,54 @@ def test_a_model_that_stalls_mid_answer_is_replaced(monkeypatch):
     assert "reset" in types and events[-1].candidate.provider == "groq"
     text = "".join(e.text for e in events[types.index("reset") :] if e.type == "delta")
     assert text == "from groq"
+
+
+def test_ollama_answer_ends_at_done_even_if_the_connection_stays_open(monkeypatch):
+    """Tunnels (ngrok, cloudflared) can keep the stream open after Ollama's last line."""
+    import json as _json
+    import threading
+    import time
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from app.core.config import get_settings
+    from app.services.chat.providers import stream_ollama
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("content-length", 0)))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            for event in (
+                {"message": {"thinking": "hmm "}},
+                {"message": {"content": "Hello"}},
+                {"message": {"content": "!"}, "done": True},
+            ):
+                body = (_json.dumps(event) + "\n").encode()
+                self.wfile.write(f"{len(body):x}\r\n".encode() + body + b"\r\n")
+                self.wfile.flush()
+            time.sleep(8)  # no closing chunk: the connection stays open
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("OLLAMA_BASE_URL", f"http://127.0.0.1:{server.server_address[1]}")
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "5")
+    get_settings.cache_clear()
+
+    async def run():
+        return [
+            p
+            async for p in stream_ollama("gemma3:4b", "s", [{"role": "user", "content": "q"}], None)
+        ]
+
+    started = time.monotonic()
+    pieces = asyncio.run(run())
+    server.shutdown()
+    assert time.monotonic() - started < 3
+    assert pieces == [("reasoning", "hmm "), ("text", "Hello"), ("text", "!")]
